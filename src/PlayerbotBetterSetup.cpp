@@ -28,6 +28,14 @@
 
 namespace
 {
+/* File map for tired mortals and any future maintainer who was told
+ * this would be "a quick tweak" five merges ago:
+ * 1) Command parsing and token wrangling.
+ * 2) Class spec catalogs and resolver logic.
+ * 3) Expansion/talent caps and post-spec refresh work.
+ * 4) Gear policy, target collection, and chat hooks.
+ */
+
 constexpr char const* CONF_SPEC_ENABLE = "PlayerbotBetterSetup.Spec.Enable";
 constexpr char const* CONF_REQUIRE_MASTER_CONTROL = "PlayerbotBetterSetup.Spec.RequireMasterControl";
 constexpr char const* CONF_SHOW_SPEC_LIST_ON_EMPTY = "PlayerbotBetterSetup.Spec.ShowSpecListOnEmpty";
@@ -38,6 +46,10 @@ constexpr char const* CONF_GEAR_MODE_ALTBOTS = "PlayerbotBetterSetup.Spec.GearMo
 constexpr char const* CONF_GEAR_RATIO_RNDBOTS = "PlayerbotBetterSetup.Spec.GearMasterIlvlRatioRndBots";
 constexpr char const* CONF_GEAR_RATIO_ALTBOTS = "PlayerbotBetterSetup.Spec.GearMasterIlvlRatioAltBots";
 constexpr char const* CONF_EXPANSION_SOURCE = "PlayerbotBetterSetup.Spec.ExpansionSource";
+
+/* These helpers do the civil-service work:
+ * players speak in accents, shortcuts, and optimism; code wants exact tokens.
+ */
 
 std::string ToLower(std::string value)
 {
@@ -143,9 +155,15 @@ struct ModuleConfig
     std::string expansionSource = "auto";
 };
 
+/* Read module knobs from config and clamp dangerous values before they can
+ * stage a dramatic escape from reality.
+ */
+
 ModuleConfig LoadModuleConfig()
 {
     ModuleConfig config;
+
+    /* First collect raw preferences from config; defaults are the life raft. */
 
     config.enabled = sConfigMgr->GetOption<bool>(CONF_SPEC_ENABLE, true);
     config.requireMasterControl = sConfigMgr->GetOption<bool>(CONF_REQUIRE_MASTER_CONTROL, true);
@@ -159,7 +177,11 @@ ModuleConfig LoadModuleConfig()
     config.gearRatioRndBots = sConfigMgr->GetOption<float>(CONF_GEAR_RATIO_RNDBOTS, 1.0f);
     config.gearRatioAltBots = sConfigMgr->GetOption<float>(CONF_GEAR_RATIO_ALTBOTS, 1.0f);
 
+    /* Normalize text settings so casing and punctuation do not become policy decisions. */
+
     config.expansionSource = NormalizeToken(sConfigMgr->GetOption<std::string>(CONF_EXPANSION_SOURCE, "auto"));
+
+    /* Clamp ratios; negative item level multipliers are fun in theory and cursed in practice. */
 
     if (config.gearRatioRndBots < 0.0f)
         config.gearRatioRndBots = 0.0f;
@@ -185,6 +207,11 @@ struct ClassSpecProfile
 };
 
 using ClassSpecMap = std::map<uint8, ClassSpecProfile>;
+
+/* Canonical class->spec dictionary.
+ * Aliases are what humans type at 2am; canonical names are what logic can trust.
+ * preferredSpecIndexes are first choice; token matching is the backup detective.
+ */
 
 ClassSpecMap const& GetClassSpecProfiles()
 {
@@ -356,16 +383,27 @@ SpecDefinition const* FindSpecDefinition(ClassSpecProfile const& profile, std::s
     return it != profile.specs.end() ? &(*it) : nullptr;
 }
 
+/* Match intent tokens against premade labels.
+ * Supports single words and phrases, because humans enjoy both abbreviations and poetry.
+ */
+
 bool MatchPremadeNameByToken(std::string const& premadeNameLower, std::vector<std::string> const& tokens)
 {
     if (tokens.empty())
         return false;
+
+    /* Build a normalized word list so punctuation cannot outvote intent. */
 
     std::vector<std::string> words = SplitWords(premadeNameLower);
     std::vector<std::string> normalizedWords;
     normalizedWords.reserve(words.size());
     for (std::string const& word : words)
         normalizedWords.push_back(NormalizeToken(word));
+
+    /* Evaluate each token:
+     * - phrases use substring matching,
+     * - single words use normalized token matching.
+     */
 
     for (std::string token : tokens)
     {
@@ -390,6 +428,15 @@ bool MatchPremadeNameByToken(std::string const& premadeNameLower, std::vector<st
     return false;
 }
 
+/* Resolve a canonical spec definition into the premade template index used by playerbots.
+ * Order of preference:
+ * 1) explicit preferred indexes that also token-match,
+ * 2) first token match with PVE in name,
+ * 3) first token match,
+ * 4) first available preferred index.
+ * In other words: strict when possible, practical when the world is on fire.
+ */
+
 int FindSpecNoForDefinition(uint8 classId, SpecDefinition const& spec)
 {
     auto const hasPremade = [&](uint8 specNo)
@@ -399,6 +446,8 @@ int FindSpecNoForDefinition(uint8 classId, SpecDefinition const& spec)
 
         return !sPlayerbotAIConfig.premadeSpecName[classId][specNo].empty();
     };
+
+    /* Phase 1: trust preferred slots when they exist and the names still match intent. */
 
     for (uint8 preferred : spec.preferredSpecIndexes)
     {
@@ -412,6 +461,8 @@ int FindSpecNoForDefinition(uint8 classId, SpecDefinition const& spec)
 
     int firstPveMatch = -1;
     int firstAnyMatch = -1;
+
+    /* Phase 2: scan all available templates and remember the best candidates. */
 
     for (uint8 specNo = 0; specNo < MAX_SPECNO; ++specNo)
     {
@@ -429,6 +480,8 @@ int FindSpecNoForDefinition(uint8 classId, SpecDefinition const& spec)
         if (firstPveMatch < 0 && premadeNameLower.find("pve") != std::string::npos)
             firstPveMatch = specNo;
     }
+
+    /* Phase 3: resolve in priority order before giving up. */
 
     if (firstPveMatch >= 0)
         return firstPveMatch;
@@ -464,6 +517,8 @@ std::string BuildSpecListMessage(Player* bot)
     std::vector<std::string> roleParts;
     std::vector<std::string> roleOrder = { "tank", "heal", "melee", "ranged", "dps" };
 
+    /* Build role summaries in a fixed order so output stays predictable for humans. */
+
     for (std::string const& role : roleOrder)
     {
         auto const roleIt = profile.roles.find(role);
@@ -488,6 +543,8 @@ std::string BuildSpecListMessage(Player* bot)
         roleParts.push_back(role + " (random " + options.str() + ")");
     }
 
+    /* Build the exact list for players who prefer precision over destiny. */
+
     std::ostringstream exact;
     for (size_t i = 0; i < profile.specs.size(); ++i)
     {
@@ -496,6 +553,8 @@ std::string BuildSpecListMessage(Player* bot)
 
         exact << FormatCanonicalName(profile.specs[i].canonical);
     }
+
+    /* Stitch the final response sentence for whisper output. */
 
     std::ostringstream message;
     message << "Valid specs: ";
@@ -523,6 +582,10 @@ struct ParsedSpecCommand
     std::string profile;
 };
 
+/* Parse "spec", "spec <profile>", and "spec <profile> gear".
+ * Anything else is politely ignored so raid chat can continue discussing fish feasts.
+ */
+
 ParsedSpecCommand ParseSpecCommand(std::string const& command)
 {
     ParsedSpecCommand parsed;
@@ -530,6 +593,8 @@ ParsedSpecCommand ParseSpecCommand(std::string const& command)
     std::vector<std::string> words = SplitWords(command);
     if (words.empty())
         return parsed;
+
+    /* If it does not start with 'spec', we leave it alone and let chat be chat. */
 
     if (NormalizeToken(words.front()) != "spec")
         return parsed;
@@ -541,6 +606,8 @@ ParsedSpecCommand ParseSpecCommand(std::string const& command)
         parsed.listOnly = true;
         return parsed;
     }
+
+    /* Optional trailing gear flag is consumed last so profile parsing stays simple. */
 
     if (NormalizeToken(words.back()) == "gear")
     {
@@ -554,6 +621,8 @@ ParsedSpecCommand ParseSpecCommand(std::string const& command)
         return parsed;
     }
 
+    /* Whatever survives after the command verb is the requested profile token. */
+
     parsed.profile = JoinWords(words, 1);
     return parsed;
 }
@@ -564,6 +633,12 @@ struct ResolvedSpec
     bool fromRole = false;
 };
 
+/* Resolve what the user asked into an exact spec definition.
+ * - Exact aliases: deterministic.
+ * - Role umbrella (tank/heal/melee/ranged/dps): uniform random among mapped options.
+ * The random branch is intentionally fair; fate should at least be evenly distributed.
+ */
+
 bool ResolveRequestedSpec(Player* bot, std::string const& requestedProfile, ResolvedSpec& resolved)
 {
     auto const& profiles = GetClassSpecProfiles();
@@ -573,6 +648,8 @@ bool ResolveRequestedSpec(Player* bot, std::string const& requestedProfile, Reso
 
     ClassSpecProfile const& profile = profileIt->second;
     std::string const requestedNorm = NormalizeToken(requestedProfile);
+
+    /* First attempt exact aliases; deterministic behavior is easier to trust. */
 
     for (SpecDefinition const& exact : profile.specs)
     {
@@ -586,6 +663,8 @@ bool ResolveRequestedSpec(Player* bot, std::string const& requestedProfile, Reso
             return true;
         }
     }
+
+    /* No exact hit: treat input as a role umbrella and roll uniformly inside it. */
 
     auto const roleIt = profile.roles.find(requestedNorm);
     if (roleIt == profile.roles.end() || roleIt->second.empty())
@@ -606,6 +685,8 @@ enum class ExpansionCap
     TBC,
     Vanilla,
 };
+
+/* Fallback expansion detector: old reliable level bands. */
 
 ExpansionCap GetLevelBasedCap(Player* bot)
 {
@@ -641,6 +722,8 @@ bool TryGetProgressionTierFromSettings(ObjectGuid::LowType guidLow, uint8& tier)
     return true;
 }
 
+/* Map mod-individual-progression tiers to expansion buckets. */
+
 ExpansionCap GetProgressionBasedCap(uint8 progressionTier)
 {
     if (progressionTier <= 7)
@@ -652,8 +735,15 @@ ExpansionCap GetProgressionBasedCap(uint8 progressionTier)
     return ExpansionCap::Wrath;
 }
 
+/* Decide which expansion cap to use for talent filtering.
+ * If limitTalentsExpansion is disabled upstream, this always resolves to Wrath.
+ * "auto" means progression tier first, then level if that data is missing.
+ */
+
 ExpansionCap ResolveExpansionCap(Player* bot, Player* commandSender, ModuleConfig const& config)
 {
+    /* If upstream expansion limiting is disabled, we keep our hands off the dial. */
+
     if (!sPlayerbotAIConfig.limitTalentsExpansion)
         return ExpansionCap::Wrath;
 
@@ -661,6 +751,8 @@ ExpansionCap ResolveExpansionCap(Player* bot, Player* commandSender, ModuleConfi
 
     if (mode == "level")
         return GetLevelBasedCap(bot);
+
+    /* Progression/auto tries character_settings first, then falls back to level bands. */
 
     if (mode == "progression" || mode == "auto")
     {
@@ -674,8 +766,15 @@ ExpansionCap ResolveExpansionCap(Player* bot, Player* commandSender, ModuleConfi
         return GetLevelBasedCap(bot);
     }
 
+    /* Unknown mode values get the boring fallback so nobody gets paged at 3am. */
+
     return GetLevelBasedCap(bot);
 }
+
+/* Hard gate for talent nodes when expansion limiting is active.
+ * Vanilla allows up to row 6 center node; TBC up to row 8 center node.
+ * This prevents helpful commands from inventing time travel.
+ */
 
 bool IsAllowedTalentNode(ExpansionCap cap, uint32 row, uint32 col)
 {
@@ -688,9 +787,15 @@ bool IsAllowedTalentNode(ExpansionCap cap, uint32 row, uint32 col)
     return true;
 }
 
+/* Build the parsed template path beginning from the nearest level that has entries.
+ * This mirrors how premade trees are defined incrementally across levels.
+ */
+
 std::vector<std::vector<uint32>> BuildTemplatePath(Player* bot, uint8 classId, int specNo)
 {
     int startLevel = static_cast<int>(bot->GetLevel());
+
+    /* Step backward to the nearest level with parsed data, then replay forward to 80. */
 
     while (startLevel > 1 && startLevel < 80 &&
            sPlayerbotAIConfig.parsedSpecLinkOrder[classId][specNo][startLevel].empty())
@@ -709,6 +814,8 @@ std::vector<std::vector<uint32>> BuildTemplatePath(Player* bot, uint8 classId, i
     return path;
 }
 
+/* Some caps do not support glyphs; when in doubt, wipe to a clean state. */
+
 void ClearGlyphs(Player* bot)
 {
     for (uint32 slotIndex = 0; slotIndex < MAX_GLYPH_SLOT_INDEX; ++slotIndex)
@@ -717,9 +824,15 @@ void ClearGlyphs(Player* bot)
     bot->SendTalentsInfoData(false);
 }
 
+/* Apply talent points from parsed template path, filtered by expansion cap.
+ * If parsed data is missing, fallback to the existing specNo initializer.
+ */
+
 bool ApplySpecTalents(Player* bot, int specNo, ExpansionCap cap)
 {
     std::vector<std::vector<uint32>> parsedPath = BuildTemplatePath(bot, bot->getClass(), specNo);
+
+    /* No parsed path means we fall back to the legacy spec initializer. */
 
     if (parsedPath.empty())
     {
@@ -729,6 +842,8 @@ bool ApplySpecTalents(Player* bot, int specNo, ExpansionCap cap)
 
     std::vector<std::vector<uint32>> filtered;
     filtered.reserve(parsedPath.size());
+
+    /* Filter template nodes through the current expansion cap before applying. */
 
     for (std::vector<uint32> const& entry : parsedPath)
     {
@@ -744,6 +859,8 @@ bool ApplySpecTalents(Player* bot, int specNo, ExpansionCap cap)
         filtered.push_back(entry);
     }
 
+    /* If filtering removed everything, fallback prevents a talentless existential crisis. */
+
     if (filtered.empty())
     {
         PlayerbotFactory::InitTalentsBySpecNo(bot, specNo, true);
@@ -754,10 +871,18 @@ bool ApplySpecTalents(Player* bot, int specNo, ExpansionCap cap)
     return true;
 }
 
+/* Rndbots and addclass bots share the same policy bucket. */
+
 bool IsRndOrAddclassBot(Player* bot)
 {
     return sRandomPlayerbotMgr.IsRandomBot(bot) || sRandomPlayerbotMgr.IsAddclassBot(bot);
 }
+
+/* Gear policy:
+ * - rnd/addclass: config toggle controls automatic gearing.
+ * - altbots: only gear when command asks for it ("gear") and config allows it.
+ * This keeps random bots fast to configure and altbots intentionally opt-in.
+ */
 
 bool ShouldAutoGear(Player* bot, bool gearRequested, ModuleConfig const& config)
 {
@@ -766,6 +891,11 @@ bool ShouldAutoGear(Player* bot, bool gearRequested, ModuleConfig const& config)
 
     return config.autoGearAltBots && gearRequested;
 }
+
+/* Derive a gear score ceiling from the master's mixed score and a ratio multiplier.
+ * Returns 0 when ratio mode cannot be used, which triggers top-for-level fallback.
+ * If math cannot provide a sane answer, the code chooses survival over purity.
+ */
 
 uint32 ComputeGearScoreLimit(Player* commandSender, float ratio)
 {
@@ -783,8 +913,15 @@ uint32 ComputeGearScoreLimit(Player* commandSender, float ratio)
     return static_cast<uint32>(scaled);
 }
 
+/* Perform equipment generation and post-processing (ammo, enchants, repairs).
+ * In ratio mode, pass the computed limit; otherwise let factory choose top-for-level.
+ * The factory does the heavy lifting; this function decides which rules of physics apply.
+ */
+
 void ApplyAutoGear(Player* bot, Player* commandSender, ModuleConfig const& config)
 {
+    /* Pick policy bucket first: rnd/addclass and altbots have different agreements. */
+
     bool const rndbot = IsRndOrAddclassBot(bot);
     std::string mode = rndbot ? config.gearModeRndBots : config.gearModeAltBots;
     float const ratio = rndbot ? config.gearRatioRndBots : config.gearRatioAltBots;
@@ -792,12 +929,16 @@ void ApplyAutoGear(Player* bot, Player* commandSender, ModuleConfig const& confi
     bool useMasterRatio = (mode == "masterilvlratio" || mode == "master_ilvl_ratio");
     uint32 gearScoreLimit = 0;
 
+    /* Ratio mode leans on master ilvl; if unavailable, top-for-level takes the wheel. */
+
     if (useMasterRatio)
     {
         gearScoreLimit = ComputeGearScoreLimit(commandSender, ratio);
         if (gearScoreLimit == 0)
             useMasterRatio = false;
     }
+
+    /* Equipment pass: gear, ammo, optional enchants, then the universal repair bill. */
 
     PlayerbotFactory factory(bot, bot->GetLevel(), ITEM_QUALITY_LEGENDARY, useMasterRatio ? gearScoreLimit : 0);
     factory.InitEquipment(false);
@@ -809,9 +950,15 @@ void ApplyAutoGear(Player* bot, Player* commandSender, ModuleConfig const& confi
     bot->DurabilityRepairAll(false, 1.0f, false);
 }
 
+/* Maintenance pass after talents:
+ * glyphs, consumables, pet init/talents, and spell book refresh.
+ */
+
 void RunPostSpecRefresh(Player* bot, ExpansionCap cap)
 {
     PlayerbotFactory factory(bot, bot->GetLevel());
+
+    /* Glyph handling depends on cap; non-wrath caps get a clean slate. */
 
     if (cap == ExpansionCap::Wrath || !sPlayerbotAIConfig.limitTalentsExpansion)
         factory.InitGlyphs(false);
@@ -821,8 +968,12 @@ void RunPostSpecRefresh(Player* bot, ExpansionCap cap)
     factory.InitConsumables();
     factory.InitPet();
 
+    /* Pet talents are expansion-gated, same as glyph expectations. */
+
     if (cap == ExpansionCap::Wrath || !sPlayerbotAIConfig.limitTalentsExpansion)
         factory.InitPetTalents();
+
+    /* Final spell sweeps repopulate class, available, and special spell lists. */
 
     factory.InitClassSpells();
     factory.InitAvailableSpells();
@@ -839,18 +990,33 @@ struct CommandResult
 
 bool CheckMasterControl(Player* commandSender, Player* bot, ModuleConfig const& config)
 {
+    /* Config can disable ownership checks entirely for wide-open admin setups. */
+
     if (!config.requireMasterControl)
         return true;
 
     if (!commandSender || !commandSender->GetSession())
         return false;
 
+    /* GM bypass exists for admin triage and operational emergencies. */
+
     if (commandSender->GetSession()->GetSecurity() >= SEC_GAMEMASTER)
         return true;
+
+    /* Default path: only the owning master gets to rewire this bot's profession in life. */
 
     PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
     return botAI && botAI->GetMaster() == commandSender;
 }
+
+/* Main per-bot pipeline:
+ * 1) split/normalize chat command,
+ * 2) apply selector filtering,
+ * 3) resolve spec intent,
+ * 4) apply talents + refresh + optional gear,
+ * 5) report failures to master with context.
+ * It reads long because it is a control tower, not because it forgot to stop.
+ */
 
 bool ProcessSpecForBot(Player* commandSender, uint32 chatType, std::string const& originalMessage, Player* bot,
                        ModuleConfig const& config, CommandResult& result)
@@ -868,6 +1034,8 @@ bool ProcessSpecForBot(Player* commandSender, uint32 chatType, std::string const
 
     for (std::string command : commands)
     {
+        /* Stage 1: trim and apply command prefix gate. */
+
         command = TrimCopy(command);
         if (command.empty())
             continue;
@@ -884,6 +1052,8 @@ bool ProcessSpecForBot(Player* commandSender, uint32 chatType, std::string const
                 continue;
         }
 
+        /* Stage 2: run selector filters (@group2, @warrior, etc.) and parse actual command text. */
+
         std::string filtered = command;
         CompositeChatFilter selectorFilter(botAI);
         filtered = selectorFilter.Filter(filtered);
@@ -896,9 +1066,13 @@ bool ProcessSpecForBot(Player* commandSender, uint32 chatType, std::string const
         if (!spec.isSpecCommand)
             continue;
 
+        /* Stage 3: mark command as handled/matched before policy checks. */
+
         processedAny = true;
         result.handled = true;
         result.matched++;
+
+        /* Stage 4: enforce master control rules and handle list-only requests. */
 
         if (!CheckMasterControl(commandSender, bot, config))
         {
@@ -914,6 +1088,8 @@ bool ProcessSpecForBot(Player* commandSender, uint32 chatType, std::string const
 
             continue;
         }
+
+        /* Stage 5: resolve requested profile and map it to a premade spec template index. */
 
         ResolvedSpec resolved;
         if (!ResolveRequestedSpec(bot, spec.profile, resolved) || !resolved.definition)
@@ -931,6 +1107,8 @@ bool ProcessSpecForBot(Player* commandSender, uint32 chatType, std::string const
                                       "' on " + bot->GetName() + '.');
             continue;
         }
+
+        /* Stage 6: apply talents, run maintenance, and optionally auto-gear. */
 
         ExpansionCap const cap = ResolveExpansionCap(bot, commandSender, config);
 
@@ -952,6 +1130,8 @@ bool ProcessSpecForBot(Player* commandSender, uint32 chatType, std::string const
 
     return processedAny;
 }
+
+/* Group targeting with de-duplication so one bot does not process the same order twice. */
 
 std::vector<Player*> CollectGroupBots(Group* group)
 {
@@ -976,6 +1156,8 @@ std::vector<Player*> CollectGroupBots(Group* group)
 
     return bots;
 }
+
+/* Guild chat targeting for controlled bots owned by the command sender's manager. */
 
 std::vector<Player*> CollectGuildBots(Player* commandSender)
 {
@@ -1005,6 +1187,11 @@ std::vector<Player*> CollectGuildBots(Player* commandSender)
     return bots;
 }
 
+/* Channel targeting, including named channels and random bot population.
+ * Membership is checked through ChannelMgr to avoid touching private Channel internals.
+ * It is not glamorous work, but neither is mopping after a desynced channel list.
+ */
+
 std::vector<Player*> CollectChannelBots(Player* commandSender, Channel* channel)
 {
     std::vector<Player*> bots;
@@ -1013,6 +1200,8 @@ std::vector<Player*> CollectChannelBots(Player* commandSender, Channel* channel)
 
     std::set<ObjectGuid> seen;
     std::string const channelName = channel->GetName();
+
+    /* Pass one: managed playerbots from this master's manager context. */
 
     if (PlayerbotMgr* manager = GET_PLAYERBOT_MGR(commandSender))
     {
@@ -1041,6 +1230,8 @@ std::vector<Player*> CollectChannelBots(Player* commandSender, Channel* channel)
             }
         }
     }
+
+    /* Pass two: random bot pool currently present in the same channel. */
 
     for (auto itr = sRandomPlayerbotMgr.GetPlayerBotsBegin(); itr != sRandomPlayerbotMgr.GetPlayerBotsEnd(); ++itr)
     {
@@ -1083,10 +1274,14 @@ void ReportSummary(Player* commandSender, CommandResult const& result)
     handler.SendSysMessage(out.str());
 }
 
+/* Load config once per incoming chat event, fan out to chosen targets, then summarize. */
+
 void ProcessTargets(Player* commandSender, uint32 chatType, std::string const& message, std::vector<Player*> const& targets)
 {
     if (!commandSender || !commandSender->GetSession())
         return;
+
+    /* One config snapshot per incoming message keeps behavior consistent per fan-out. */
 
     ModuleConfig const config = LoadModuleConfig();
     if (!config.enabled)
@@ -1117,6 +1312,8 @@ public:
     {
     }
 
+    /* Whisper path: direct one-bot control. */
+
     bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 /*language*/, std::string& msg, Player* receiver) override
     {
         if (!player || !receiver)
@@ -1129,6 +1326,8 @@ public:
         return true;
     }
 
+    /* Group/raid path: selectors such as @group2 @warrior are evaluated per bot downstream. */
+
     bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 /*language*/, std::string& msg, Group* group) override
     {
         if (!player || !group)
@@ -1138,6 +1337,8 @@ public:
         return true;
     }
 
+    /* Guild path: command fans out to guild bots available to this master context. */
+
     bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 /*language*/, std::string& msg, Guild* guild) override
     {
         if (!player || !guild || type != CHAT_MSG_GUILD)
@@ -1146,6 +1347,8 @@ public:
         ProcessTargets(player, type, msg, CollectGuildBots(player));
         return true;
     }
+
+    /* Channel path: useful for mass commands in shared channels. */
 
     bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 /*language*/, std::string& msg, Channel* channel) override
     {
@@ -1157,7 +1360,7 @@ public:
     }
 };
 
-} // namespace
+} /* namespace */
 
 void AddPlayerbotBetterSetupScripts()
 {
