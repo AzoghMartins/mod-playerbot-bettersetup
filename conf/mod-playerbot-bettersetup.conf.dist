@@ -8,10 +8,69 @@
 # mod-playerbot-bettersetup module
 ########################################
 #
-#    PlayerbotBetterSetup.Enable
-#        Description: Enable module login message used by the initial scaffold.
+# Unified spec command for mod-playerbots.
+#
+#    PlayerbotBetterSetup.Spec.Enable
+#        Description: Enables the unified spec command handling.
 #        Default:     0 - Disabled
 #                     1 - Enabled
 #
+#    PlayerbotBetterSetup.Spec.RequireMasterControl
+#        Description: If enabled, command sender must be the bot master (except GMs).
+#        Default:     0 - Disabled
+#                     1 - Enabled
+#
+#    PlayerbotBetterSetup.Spec.ShowSpecListOnEmpty
+#        Description: If enabled, 'spec' with no args returns valid options.
+#        Default:     0 - Disabled
+#                     1 - Enabled
+#
+#    PlayerbotBetterSetup.Spec.AutoGearRndBots
+#        Description: Auto-gear rnd/addclass bots after 'spec'.
+#                     'gear' argument is NOT required for rnd/addclass bots.
+#        Default:     0 - Disabled
+#                     1 - Enabled
+#
+#    PlayerbotBetterSetup.Spec.AutoGearAltBots
+#        Description: Allows altbot autogear, but only when command includes 'gear'.
+#        Default:     0 - Disabled
+#                     1 - Enabled
+#
+#    PlayerbotBetterSetup.Spec.ExpansionSource
+#        Description: Expansion source used for talent/glyph limits when
+#                     AiPlayerbot.LimitTalentsExpansion = 1.
+#        Allowed:     level, progression, auto
+#                     level       -> use level thresholds
+#                     progression -> use character_settings row for source
+#                                    'mod-individual-progression'
+#                     auto        -> progression if present, else level
+#        Default:     auto
+#
+#    PlayerbotBetterSetup.Spec.GearModeRndBots
+#    PlayerbotBetterSetup.Spec.GearModeAltBots
+#        Description: Gear mode after spec.
+#        Allowed:     top_for_level, master_ilvl_ratio
+#        Default:     master_ilvl_ratio
+#
+#    PlayerbotBetterSetup.Spec.GearMasterIlvlRatioRndBots
+#    PlayerbotBetterSetup.Spec.GearMasterIlvlRatioAltBots
+#        Description: Ratio applied to commanding player's mixed item level
+#                     when GearMode* = master_ilvl_ratio.
+#                     If master ilvl context is invalid, falls back to top_for_level.
+#        Default:     1.0
+#
 
-PlayerbotBetterSetup.Enable = 1
+PlayerbotBetterSetup.Spec.Enable = 1
+PlayerbotBetterSetup.Spec.RequireMasterControl = 1
+PlayerbotBetterSetup.Spec.ShowSpecListOnEmpty = 1
+
+PlayerbotBetterSetup.Spec.AutoGearRndBots = 1
+PlayerbotBetterSetup.Spec.AutoGearAltBots = 0
+
+PlayerbotBetterSetup.Spec.ExpansionSource = auto
+
+PlayerbotBetterSetup.Spec.GearModeRndBots = master_ilvl_ratio
+PlayerbotBetterSetup.Spec.GearModeAltBots = master_ilvl_ratio
+
+PlayerbotBetterSetup.Spec.GearMasterIlvlRatioRndBots = 1.0
+PlayerbotBetterSetup.Spec.GearMasterIlvlRatioAltBots = 1.0
