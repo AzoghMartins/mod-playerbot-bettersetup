@@ -1,0 +1,1 @@
+# mod-playerbot-bettersetup
