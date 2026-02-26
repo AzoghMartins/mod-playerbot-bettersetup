@@ -54,6 +54,7 @@ constexpr char const* CONF_GEAR_RETRY_COUNT = "PlayerbotBetterSetup.Spec.GearRet
 constexpr char const* CONF_GEAR_QUALITY_CAP_RATIO_MODE = "PlayerbotBetterSetup.Spec.GearQualityCapRatioMode";
 constexpr char const* CONF_GEAR_QUALITY_CAP_TOP_FOR_LEVEL = "PlayerbotBetterSetup.Spec.GearQualityCapTopForLevel";
 constexpr char const* CONF_LOGIN_DIAGNOSTICS_ENABLE = "PlayerbotBetterSetup.LoginDiagnostics.Enable";
+constexpr char const* CONF_GEARSELF_MIN_SECURITY = "PlayerbotBetterSetup.GearSelf.MinSecurityLevel";
 
 /* These helpers do the civil-service work:
  * players speak in accents, shortcuts, and optimism; code wants exact tokens.
@@ -152,6 +153,7 @@ struct ModuleConfig
     bool requireMasterControl = true;
     bool showSpecListOnEmpty = true;
     bool loginDiagnosticsEnable = true;
+    uint8 gearSelfMinSecurity = SEC_GAMEMASTER;
 
     bool autoGearRndBots = true;
     bool autoGearAltBots = false;
@@ -183,6 +185,7 @@ ModuleConfig LoadModuleConfig()
     config.requireMasterControl = sConfigMgr->GetOption<bool>(CONF_REQUIRE_MASTER_CONTROL, true);
     config.showSpecListOnEmpty = sConfigMgr->GetOption<bool>(CONF_SHOW_SPEC_LIST_ON_EMPTY, true);
     config.loginDiagnosticsEnable = sConfigMgr->GetOption<bool>(CONF_LOGIN_DIAGNOSTICS_ENABLE, true);
+    config.gearSelfMinSecurity = static_cast<uint8>(sConfigMgr->GetOption<uint32>(CONF_GEARSELF_MIN_SECURITY, SEC_GAMEMASTER));
 
     config.autoGearRndBots = sConfigMgr->GetOption<bool>(CONF_AUTO_GEAR_RNDBOTS, true);
     config.autoGearAltBots = sConfigMgr->GetOption<bool>(CONF_AUTO_GEAR_ALTBOTS, false);
@@ -220,6 +223,7 @@ ModuleConfig LoadModuleConfig()
     config.gearRetryCount = std::clamp<uint8>(config.gearRetryCount, 1, 20);
     config.gearQualityCapRatioMode = std::clamp<uint8>(config.gearQualityCapRatioMode, ITEM_QUALITY_NORMAL, ITEM_QUALITY_LEGENDARY);
     config.gearQualityCapTopForLevel = std::clamp<uint8>(config.gearQualityCapTopForLevel, ITEM_QUALITY_NORMAL, ITEM_QUALITY_LEGENDARY);
+    config.gearSelfMinSecurity = std::clamp<uint8>(config.gearSelfMinSecurity, SEC_PLAYER, SEC_ADMINISTRATOR);
 
     return config;
 }
@@ -1534,10 +1538,12 @@ void ProcessSelfCommands(Player* commandSender, std::string const& originalMessa
             continue;
 
         ChatHandler handler(commandSender->GetSession());
+        uint8 const currentSecurity = static_cast<uint8>(commandSender->GetSession()->GetSecurity());
 
-        if (commandSender->GetSession()->GetSecurity() < SEC_GAMEMASTER)
+        if (currentSecurity < config.gearSelfMinSecurity)
         {
-            handler.SendSysMessage("gearself: GM permission required.");
+            handler.PSendSysMessage("gearself: account level {} required (current {}).",
+                                    uint32(config.gearSelfMinSecurity), uint32(currentSecurity));
             continue;
         }
 

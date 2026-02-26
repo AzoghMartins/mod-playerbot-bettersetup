@@ -1,46 +1,105 @@
 # mod-playerbot-bettersetup
 
-`mod-playerbot-bettersetup` is an extension module for `mod-playerbots` focused on bot setup quality-of-life.
+`mod-playerbot-bettersetup` extends `mod-playerbots` with a unified bot spec workflow.
 
-It introduces a unified `spec` command that works for both rndbots/addclass bots and altbots, with selector support (`@group2`, `@warrior`, etc.), role-based or exact-spec targeting, and consistent post-spec setup behavior.
+It adds one command family (`spec`) that works for both rnd/addclass bots and altbots, supports selectors (`@group2`, `@warrior`, etc.), applies expansion-aware talents, performs post-spec maintenance, and supports configurable autogear rules.
 
-## What this module does
+## Features
 
-- Unifies spec assignment into one command family: `spec`.
-- Supports role-based picks (`tank`, `heal`, `dps`, `melee`, `ranged`) and exact specs (`prot`, `mm`, etc.).
-- Applies one consistent spec flow for both rndbots and altbots.
-- Adds configurable post-spec autogear policy by bot type.
-- Supports expansion-limit behavior based on:
-  - level-based playerbots logic, or
-  - progression tiers from `mod-individual-progression`.
+- Unified `spec` command for playerbots in whisper/group/raid/guild/channel contexts.
+- Role and exact-spec targeting with aliases (for example `tank`, `holy`, `prot`, `mm`).
+- Selector compatibility through existing playerbot chat filters (`@groupX`, `@class`, etc.).
+- Expansion-aware talent application honoring `AiPlayerbot.LimitTalentsExpansion`.
+- Optional progression-tier expansion source via `mod-individual-progression` (`character_settings`).
+- Configurable autogear policy split between rnd/addclass bots and altbots.
+- Gear target based on commanding player's average ilvl when using `master_ilvl_ratio` mode.
+- Post-spec maintenance for glyphs, consumables, pets, pet talents, and spell refresh.
+- Optional login diagnostics in chat.
+- Configurable-security `gearself` helper command for test gearing.
 
-## How to use
+## Commands
 
-Send commands the same way you already command playerbots (whisper, party, raid, channel), including selectors.
+Use normal playerbot chat channels and prefixes.
+
+- `spec`
+- `spec <profile>`
+- `spec <profile> gear`
+- `gearself` (minimum account level is configurable)
 
 Examples:
 
 - `spec`
 - `spec tank`
-- `spec combat`
+- `spec holy`
+- `spec prot`
 - `spec dps gear`
 - `@group2 @warrior spec tank`
 - `@group2 @warrior spec dps gear`
 
-Autogear behavior:
+### `spec` behavior
 
-- rndbot/addclass bots: geared on `spec ...` when `AutoGearRndBots=1`.
-- altbots: geared only if command includes `gear` and `AutoGearAltBots=1`.
+- `spec` with no argument returns valid role/spec options for the target bot class.
+- `<profile>` can be a role or an exact spec alias.
+- Invalid profiles return a bot-to-master error with valid options.
+- For role profiles mapping to multiple specs, selection is uniform random.
+
+### `gear` flag behavior
+
+- rnd/addclass bot: if `PlayerbotBetterSetup.Spec.AutoGearRndBots = 1`, bot is geared after `spec` even without `gear`.
+- altbot: bot is geared only when both are true:
+  - `PlayerbotBetterSetup.Spec.AutoGearAltBots = 1`
+  - command includes `gear`
+
+### `gearself`
+
+- Commanding player only.
+- Requires account level at or above `PlayerbotBetterSetup.GearSelf.MinSecurityLevel`.
+- Targets average ilvl approximately to character level.
+- Intended for testing/master setup convenience.
+
+## Expansion Source Logic
+
+Used when `AiPlayerbot.LimitTalentsExpansion = 1`.
+
+- `level`: 1-60 Vanilla, 61-70 TBC, 71-80 Wrath.
+- `progression`: reads `character_settings` where `source = 'mod-individual-progression'`.
+- `auto`: progression first, level fallback if progression data is missing.
+
+Progression tiers are mapped as:
+
+- 0-7: Vanilla
+- 8-12: TBC
+- 13+: Wrath
+
+## Key Config Options
+
+See `conf/mod-playerbot-bettersetup.conf.dist` for full descriptions.
+
+- `PlayerbotBetterSetup.Spec.Enable`
+- `PlayerbotBetterSetup.Spec.RequireMasterControl`
+- `PlayerbotBetterSetup.Spec.ShowSpecListOnEmpty`
+- `PlayerbotBetterSetup.Spec.AutoGearRndBots`
+- `PlayerbotBetterSetup.Spec.AutoGearAltBots`
+- `PlayerbotBetterSetup.Spec.ExpansionSource`
+- `PlayerbotBetterSetup.Spec.GearModeRndBots`
+- `PlayerbotBetterSetup.Spec.GearModeAltBots`
+- `PlayerbotBetterSetup.Spec.GearMasterIlvlRatioRndBots`
+- `PlayerbotBetterSetup.Spec.GearMasterIlvlRatioAltBots`
+- `PlayerbotBetterSetup.Spec.GearValidationLowerRatio`
+- `PlayerbotBetterSetup.Spec.GearValidationUpperRatio`
+- `PlayerbotBetterSetup.Spec.GearRetryCount`
+- `PlayerbotBetterSetup.Spec.GearQualityCapRatioMode`
+- `PlayerbotBetterSetup.Spec.GearQualityCapTopForLevel`
+- `PlayerbotBetterSetup.LoginDiagnostics.Enable`
+- `PlayerbotBetterSetup.GearSelf.MinSecurityLevel`
 
 ## Requirements
 
-- `mod-playerbots` (required)
-- `mod-individual-progression` (optional, only for progression-based expansion source)
+- Required: `mod-playerbots`
+- Optional: `mod-individual-progression` (only needed for `ExpansionSource = progression|auto` progression lookup)
 
-## Status
+## Design Notes
 
-Design is documented in:
+Design and planning details are maintained in:
 
 - `docs/unified-spec-command-design.md`
-
-Implementation is in progress.

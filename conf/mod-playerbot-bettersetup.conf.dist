@@ -80,6 +80,11 @@
 #        Default:     0 - Disabled
 #                     1 - Enabled
 #
+#    PlayerbotBetterSetup.GearSelf.MinSecurityLevel
+#        Description: Minimum account level required to use `gearself`.
+#                     0 = player, 1 = moderator, 2 = gamemaster, 3 = administrator
+#        Default:     2
+#
 
 PlayerbotBetterSetup.Spec.Enable = 1
 PlayerbotBetterSetup.Spec.RequireMasterControl = 1
@@ -104,3 +109,4 @@ PlayerbotBetterSetup.Spec.GearQualityCapRatioMode = 4
 PlayerbotBetterSetup.Spec.GearQualityCapTopForLevel = 5
 
 PlayerbotBetterSetup.LoginDiagnostics.Enable = 1
+PlayerbotBetterSetup.GearSelf.MinSecurityLevel = 2
