@@ -7,6 +7,7 @@
 #include "Chat.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
+#include "Item.h"
 #include "Player.h"
 #include "Random.h"
 #include "ScriptMgr.h"
@@ -19,6 +20,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <map>
 #include <set>
 #include <sstream>
@@ -46,6 +48,12 @@ constexpr char const* CONF_GEAR_MODE_ALTBOTS = "PlayerbotBetterSetup.Spec.GearMo
 constexpr char const* CONF_GEAR_RATIO_RNDBOTS = "PlayerbotBetterSetup.Spec.GearMasterIlvlRatioRndBots";
 constexpr char const* CONF_GEAR_RATIO_ALTBOTS = "PlayerbotBetterSetup.Spec.GearMasterIlvlRatioAltBots";
 constexpr char const* CONF_EXPANSION_SOURCE = "PlayerbotBetterSetup.Spec.ExpansionSource";
+constexpr char const* CONF_GEAR_VALIDATION_LOWER_RATIO = "PlayerbotBetterSetup.Spec.GearValidationLowerRatio";
+constexpr char const* CONF_GEAR_VALIDATION_UPPER_RATIO = "PlayerbotBetterSetup.Spec.GearValidationUpperRatio";
+constexpr char const* CONF_GEAR_RETRY_COUNT = "PlayerbotBetterSetup.Spec.GearRetryCount";
+constexpr char const* CONF_GEAR_QUALITY_CAP_RATIO_MODE = "PlayerbotBetterSetup.Spec.GearQualityCapRatioMode";
+constexpr char const* CONF_GEAR_QUALITY_CAP_TOP_FOR_LEVEL = "PlayerbotBetterSetup.Spec.GearQualityCapTopForLevel";
+constexpr char const* CONF_LOGIN_DIAGNOSTICS_ENABLE = "PlayerbotBetterSetup.LoginDiagnostics.Enable";
 
 /* These helpers do the civil-service work:
  * players speak in accents, shortcuts, and optimism; code wants exact tokens.
@@ -143,6 +151,7 @@ struct ModuleConfig
     bool enabled = true;
     bool requireMasterControl = true;
     bool showSpecListOnEmpty = true;
+    bool loginDiagnosticsEnable = true;
 
     bool autoGearRndBots = true;
     bool autoGearAltBots = false;
@@ -153,6 +162,11 @@ struct ModuleConfig
     float gearRatioAltBots = 1.0f;
 
     std::string expansionSource = "auto";
+    float gearValidationLowerRatio = 0.85f;
+    float gearValidationUpperRatio = 1.15f;
+    uint8 gearRetryCount = 4;
+    uint8 gearQualityCapRatioMode = ITEM_QUALITY_EPIC;
+    uint8 gearQualityCapTopForLevel = ITEM_QUALITY_LEGENDARY;
 };
 
 /* Read module knobs from config and clamp dangerous values before they can
@@ -168,6 +182,7 @@ ModuleConfig LoadModuleConfig()
     config.enabled = sConfigMgr->GetOption<bool>(CONF_SPEC_ENABLE, true);
     config.requireMasterControl = sConfigMgr->GetOption<bool>(CONF_REQUIRE_MASTER_CONTROL, true);
     config.showSpecListOnEmpty = sConfigMgr->GetOption<bool>(CONF_SHOW_SPEC_LIST_ON_EMPTY, true);
+    config.loginDiagnosticsEnable = sConfigMgr->GetOption<bool>(CONF_LOGIN_DIAGNOSTICS_ENABLE, true);
 
     config.autoGearRndBots = sConfigMgr->GetOption<bool>(CONF_AUTO_GEAR_RNDBOTS, true);
     config.autoGearAltBots = sConfigMgr->GetOption<bool>(CONF_AUTO_GEAR_ALTBOTS, false);
@@ -180,6 +195,11 @@ ModuleConfig LoadModuleConfig()
     /* Normalize text settings so casing and punctuation do not become policy decisions. */
 
     config.expansionSource = NormalizeToken(sConfigMgr->GetOption<std::string>(CONF_EXPANSION_SOURCE, "auto"));
+    config.gearValidationLowerRatio = sConfigMgr->GetOption<float>(CONF_GEAR_VALIDATION_LOWER_RATIO, 0.85f);
+    config.gearValidationUpperRatio = sConfigMgr->GetOption<float>(CONF_GEAR_VALIDATION_UPPER_RATIO, 1.15f);
+    config.gearRetryCount = static_cast<uint8>(sConfigMgr->GetOption<uint32>(CONF_GEAR_RETRY_COUNT, 4));
+    config.gearQualityCapRatioMode = static_cast<uint8>(sConfigMgr->GetOption<uint32>(CONF_GEAR_QUALITY_CAP_RATIO_MODE, ITEM_QUALITY_EPIC));
+    config.gearQualityCapTopForLevel = static_cast<uint8>(sConfigMgr->GetOption<uint32>(CONF_GEAR_QUALITY_CAP_TOP_FOR_LEVEL, ITEM_QUALITY_LEGENDARY));
 
     /* Clamp ratios; negative item level multipliers are fun in theory and cursed in practice. */
 
@@ -188,6 +208,18 @@ ModuleConfig LoadModuleConfig()
 
     if (config.gearRatioAltBots < 0.0f)
         config.gearRatioAltBots = 0.0f;
+
+    /* Keep validation and normalization values in a sane range before use. */
+
+    if (config.gearValidationLowerRatio <= 0.0f)
+        config.gearValidationLowerRatio = 0.01f;
+
+    if (config.gearValidationUpperRatio < config.gearValidationLowerRatio)
+        config.gearValidationUpperRatio = config.gearValidationLowerRatio;
+
+    config.gearRetryCount = std::clamp<uint8>(config.gearRetryCount, 1, 20);
+    config.gearQualityCapRatioMode = std::clamp<uint8>(config.gearQualityCapRatioMode, ITEM_QUALITY_NORMAL, ITEM_QUALITY_LEGENDARY);
+    config.gearQualityCapTopForLevel = std::clamp<uint8>(config.gearQualityCapTopForLevel, ITEM_QUALITY_NORMAL, ITEM_QUALITY_LEGENDARY);
 
     return config;
 }
@@ -627,6 +659,19 @@ ParsedSpecCommand ParseSpecCommand(std::string const& command)
     return parsed;
 }
 
+/* Parse a plain "gearself" command token. Extra words are ignored on purpose
+ * so people can append notes without derailing the operation.
+ */
+
+bool IsGearSelfCommand(std::string const& command)
+{
+    std::vector<std::string> words = SplitWords(command);
+    if (words.empty())
+        return false;
+
+    return NormalizeToken(words.front()) == "gearself";
+}
+
 struct ResolvedSpec
 {
     SpecDefinition const* definition = nullptr;
@@ -685,6 +730,22 @@ enum class ExpansionCap
     TBC,
     Vanilla,
 };
+
+/* Turn expansion enums into stable human words for login diagnostics. */
+
+char const* ExpansionCapToString(ExpansionCap cap)
+{
+    switch (cap)
+    {
+        case ExpansionCap::Vanilla:
+            return "Vanilla";
+        case ExpansionCap::TBC:
+            return "TBC";
+        case ExpansionCap::Wrath:
+        default:
+            return "Wrath";
+    }
+}
 
 /* Fallback expansion detector: old reliable level bands. */
 
@@ -892,30 +953,121 @@ bool ShouldAutoGear(Player* bot, bool gearRequested, ModuleConfig const& config)
     return config.autoGearAltBots && gearRequested;
 }
 
-/* Derive a gear score ceiling from the master's mixed score and a ratio multiplier.
- * Returns 0 when ratio mode cannot be used, which triggers top-for-level fallback.
- * If math cannot provide a sane answer, the code chooses survival over purity.
+/* Compute the module target average ilvl from master average * ratio.
+ * This is intentionally average-ilvl based, because that is the user-facing contract.
  */
 
-uint32 ComputeGearScoreLimit(Player* commandSender, float ratio)
+float ComputeMasterTargetAverageIlvl(Player* commandSender, float ratio)
 {
     if (!commandSender)
-        return 0;
+        return 0.0f;
 
-    uint32 const mixed = PlayerbotAI::GetMixedGearScore(commandSender, true, false, 12);
-    if (mixed == 0)
-        return 0;
+    float const averageIlvl = commandSender->GetAverageItemLevelForDF();
+    if (averageIlvl <= 0.0f)
+        return 0.0f;
 
-    float const scaled = static_cast<float>(mixed) * ratio;
+    float const scaled = averageIlvl * ratio;
     if (scaled <= 0.0f)
+        return 0.0f;
+
+    return std::max(1.0f, scaled);
+}
+
+/* Convert target average ilvl into the mixed-gear-score cap used by the factory filter. */
+
+uint32 ComputeGearScoreLimitFromAverageIlvl(float targetAverageIlvl)
+{
+    if (targetAverageIlvl <= 0.0f)
         return 0;
 
-    return static_cast<uint32>(scaled);
+    uint32 const limit = PlayerbotFactory::CalcMixedGearScore(static_cast<uint32>(std::round(targetAverageIlvl)), ITEM_QUALITY_EPIC);
+    return limit == 0 ? 1 : limit;
+}
+
+/* Gear pre-step:
+ * clear ammo so ranged selection can be refreshed,
+ * but do not destroy item objects here (that can poison inventory update queues).
+ */
+
+void DestroyOldGear(Player* bot)
+{
+    if (!bot)
+        return;
+
+    bot->SetAmmo(0);
+}
+
+/* Validate that equipped gear is reasonably close to target average ilvl and
+ * does not include low-quality junk.
+ */
+
+bool IsGearWithinTargetBand(Player* bot, float targetAverageIlvl, ModuleConfig const& config)
+{
+    if (!bot || targetAverageIlvl <= 0.0f)
+        return true;
+
+    float const lowerBound = std::max(1.0f, targetAverageIlvl * config.gearValidationLowerRatio);
+    float const upperBound = targetAverageIlvl * config.gearValidationUpperRatio;
+
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        if (slot == EQUIPMENT_SLOT_BODY || slot == EQUIPMENT_SLOT_TABARD)
+            continue;
+
+        Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item)
+            continue;
+
+        ItemTemplate const* proto = item->GetTemplate();
+        if (!proto)
+            continue;
+
+        if (proto->Quality <= ITEM_QUALITY_NORMAL)
+            return false;
+
+        float const itemLevel = static_cast<float>(proto->ItemLevel);
+        if (itemLevel < lowerBound || itemLevel > upperBound)
+            return false;
+    }
+
+    return true;
+}
+
+/* One gearing pass (equipment/ammo/enchants/repair) with a chosen cap.
+ * cap == 0 means top-for-level mode.
+ */
+
+void RunGearPass(Player* bot, uint32 gearScoreLimit, uint32 qualityLimit)
+{
+    PlayerbotFactory factory(bot, bot->GetLevel(), qualityLimit, gearScoreLimit);
+    factory.InitEquipment(false, true);
+    factory.InitAmmo();
+
+    if (bot->GetLevel() >= sPlayerbotAIConfig.minEnchantingBotLevel)
+        factory.ApplyEnchantAndGemsNew();
+
+    bot->DurabilityRepairAll(false, 1.0f, false);
+}
+
+/* Build a readable target-ilvl label from mode/ratio policy.
+ * Ratio mode prints a numeric target when possible; otherwise it reports fallback.
+ */
+
+std::string BuildTargetIlvlLabel(Player* commandSender, std::string const& mode, float ratio)
+{
+    bool const useMasterRatio = (mode == "masterilvlratio" || mode == "master_ilvl_ratio");
+    if (!useMasterRatio)
+        return "top_for_level";
+
+    float const targetAverageIlvl = ComputeMasterTargetAverageIlvl(commandSender, ratio);
+    if (targetAverageIlvl <= 0.0f)
+        return "top_for_level (ratio fallback)";
+
+    return std::to_string(static_cast<uint32>(targetAverageIlvl));
 }
 
 /* Perform equipment generation and post-processing (ammo, enchants, repairs).
- * In ratio mode, pass the computed limit; otherwise let factory choose top-for-level.
- * The factory does the heavy lifting; this function decides which rules of physics apply.
+ * Ratio mode follows init=auto style cap source; fallback remains top-for-level.
  */
 
 void ApplyAutoGear(Player* bot, Player* commandSender, ModuleConfig const& config)
@@ -926,28 +1078,34 @@ void ApplyAutoGear(Player* bot, Player* commandSender, ModuleConfig const& confi
     std::string mode = rndbot ? config.gearModeRndBots : config.gearModeAltBots;
     float const ratio = rndbot ? config.gearRatioRndBots : config.gearRatioAltBots;
 
-    bool useMasterRatio = (mode == "masterilvlratio" || mode == "master_ilvl_ratio");
-    uint32 gearScoreLimit = 0;
+    bool const useMasterRatio = (mode == "masterilvlratio" || mode == "master_ilvl_ratio");
 
-    /* Ratio mode leans on master ilvl; if unavailable, top-for-level takes the wheel. */
+    /* Ratio mode uses init=auto-style cap source (master mixed gs). */
 
     if (useMasterRatio)
     {
-        gearScoreLimit = ComputeGearScoreLimit(commandSender, ratio);
-        if (gearScoreLimit == 0)
-            useMasterRatio = false;
+        float const targetAverageIlvl = ComputeMasterTargetAverageIlvl(commandSender, ratio);
+        uint32 const gearScoreLimit = ComputeGearScoreLimitFromAverageIlvl(targetAverageIlvl);
+
+        if (targetAverageIlvl > 0.0f && gearScoreLimit != 0)
+        {
+            for (uint8 attempt = 0; attempt < config.gearRetryCount; ++attempt)
+            {
+                DestroyOldGear(bot);
+                RunGearPass(bot, gearScoreLimit, config.gearQualityCapRatioMode);
+
+                if (IsGearWithinTargetBand(bot, targetAverageIlvl, config))
+                    break;
+            }
+
+            return;
+        }
     }
 
-    /* Equipment pass: gear, ammo, optional enchants, then the universal repair bill. */
+    /* Top-for-level fallback path for invalid ratio context or explicit top_for_level mode. */
 
-    PlayerbotFactory factory(bot, bot->GetLevel(), ITEM_QUALITY_LEGENDARY, useMasterRatio ? gearScoreLimit : 0);
-    factory.InitEquipment(false);
-    factory.InitAmmo();
-
-    if (bot->GetLevel() >= sPlayerbotAIConfig.minEnchantingBotLevel)
-        factory.ApplyEnchantAndGemsNew();
-
-    bot->DurabilityRepairAll(false, 1.0f, false);
+    DestroyOldGear(bot);
+    RunGearPass(bot, 0, config.gearQualityCapTopForLevel);
 }
 
 /* Maintenance pass after talents:
@@ -1300,16 +1458,187 @@ void ProcessTargets(Player* commandSender, uint32 chatType, std::string const& m
     ReportSummary(commandSender, result);
 }
 
+/* Self-service test helper:
+ * gears the player toward target average ilvl = character level.
+ * We steer the factory cap using small feedback iterations.
+ */
+
+void ApplyGearSelf(Player* player)
+{
+    uint32 const targetIlvl = player->GetLevel();
+    uint32 gearScoreLimit = PlayerbotFactory::CalcMixedGearScore(targetIlvl, ITEM_QUALITY_NORMAL);
+
+    for (uint8 attempt = 0; attempt < 6; ++attempt)
+    {
+        PlayerbotFactory factory(player, player->GetLevel(), ITEM_QUALITY_LEGENDARY, gearScoreLimit);
+        factory.InitEquipment(false);
+        factory.InitAmmo();
+
+        if (player->GetLevel() >= sPlayerbotAIConfig.minEnchantingBotLevel)
+            factory.ApplyEnchantAndGemsNew();
+
+        player->DurabilityRepairAll(false, 1.0f, false);
+
+        uint32 const currentIlvl = static_cast<uint32>(player->GetAverageItemLevelForDF());
+        if (currentIlvl == targetIlvl || currentIlvl == 0)
+            break;
+
+        float const scaled = static_cast<float>(gearScoreLimit) * static_cast<float>(targetIlvl) / static_cast<float>(currentIlvl);
+        uint32 nextLimit = static_cast<uint32>(scaled);
+
+        if (nextLimit == gearScoreLimit)
+        {
+            if (currentIlvl > targetIlvl && nextLimit > 1)
+                --nextLimit;
+            else if (currentIlvl < targetIlvl)
+                ++nextLimit;
+        }
+
+        gearScoreLimit = std::max<uint32>(1, nextLimit);
+    }
+}
+
+/* Parse incoming chat, honor command prefix/separator, and execute gearself once
+ * for each explicit appearance in the message.
+ */
+
+void ProcessSelfCommands(Player* commandSender, std::string const& originalMessage)
+{
+    if (!commandSender || !commandSender->GetSession())
+        return;
+
+    ModuleConfig const config = LoadModuleConfig();
+    if (!config.enabled)
+        return;
+
+    std::vector<std::string> commands = SplitCommands(originalMessage, sPlayerbotAIConfig.commandSeparator);
+    for (std::string command : commands)
+    {
+        command = TrimCopy(command);
+        if (command.empty())
+            continue;
+
+        if (!sPlayerbotAIConfig.commandPrefix.empty())
+        {
+            if (!StartsWith(command, sPlayerbotAIConfig.commandPrefix))
+                continue;
+
+            command = command.substr(sPlayerbotAIConfig.commandPrefix.size());
+            command = TrimCopy(command);
+
+            if (command.empty())
+                continue;
+        }
+
+        if (!IsGearSelfCommand(command))
+            continue;
+
+        ChatHandler handler(commandSender->GetSession());
+
+        if (commandSender->GetSession()->GetSecurity() < SEC_GAMEMASTER)
+        {
+            handler.SendSysMessage("gearself: GM permission required.");
+            continue;
+        }
+
+        ApplyGearSelf(commandSender);
+        uint32 const currentAvgIlvl = static_cast<uint32>(commandSender->GetAverageItemLevelForDF());
+        handler.PSendSysMessage("gearself: target average ilvl {} (from level), current average ilvl {}.",
+                                commandSender->GetLevel(), currentAvgIlvl);
+    }
+}
+
+/* Shared login diagnostics block so one message format serves every login hook path. */
+
+void SendLoginDiagnostics(Player* player)
+{
+    if (!player || !player->GetSession())
+        return;
+
+    ModuleConfig const config = LoadModuleConfig();
+    if (!config.loginDiagnosticsEnable)
+        return;
+
+    bool const individualProgressionEnabled = sConfigMgr->GetOption<bool>("IndividualProgression.Enable", false, false);
+
+    uint8 progressionTier = 0;
+    bool const hasProgressionTier = TryGetProgressionTierFromSettings(player->GetGUID().GetCounter(), progressionTier);
+    ExpansionCap const expansionCap = ResolveExpansionCap(player, player, config);
+
+    std::ostringstream expansionOut;
+    expansionOut << ExpansionCapToString(expansionCap);
+
+    if (!sPlayerbotAIConfig.limitTalentsExpansion)
+    {
+        expansionOut << " (AiPlayerbot.LimitTalentsExpansion=0)";
+    }
+    else if (config.expansionSource == "progression")
+    {
+        if (hasProgressionTier)
+            expansionOut << " (progression tier " << uint32(progressionTier) << ")";
+        else
+            expansionOut << " (progression tier missing, level fallback)";
+    }
+    else if (config.expansionSource == "auto")
+    {
+        if (hasProgressionTier)
+            expansionOut << " (auto -> progression tier " << uint32(progressionTier) << ")";
+        else
+            expansionOut << " (auto -> level fallback)";
+    }
+    else
+    {
+        expansionOut << " (level source)";
+    }
+
+    uint32 const masterIlvl = static_cast<uint32>(player->GetAverageItemLevelForDF());
+    std::string const rndTarget = BuildTargetIlvlLabel(player, config.gearModeRndBots, config.gearRatioRndBots);
+    std::string const altTarget = BuildTargetIlvlLabel(player, config.gearModeAltBots, config.gearRatioAltBots);
+
+    ChatHandler handler(player->GetSession());
+    handler.SendSysMessage("|cff00ff00mod-playerbot-bettersetup:|r loaded");
+    handler.SendSysMessage(std::string("|cff00ff00Individual Progression:|r ") + (individualProgressionEnabled ? "loaded" : "not loaded/disabled"));
+    handler.SendSysMessage("|cff00ff00Expansion used to determine gear:|r " + expansionOut.str());
+    handler.PSendSysMessage("|cff00ff00Master average ilvl:|r {}", masterIlvl);
+    handler.SendSysMessage("|cff00ff00Bot target ilvl (rnd/alt):|r " + rndTarget + " / " + altTarget);
+}
+
+class PlayerbotBetterSetupLoginScript final : public PlayerScript
+{
+public:
+    PlayerbotBetterSetupLoginScript()
+        : PlayerScript("PlayerbotBetterSetupLoginScript")
+    {
+    }
+
+    void OnPlayerLogin(Player* player) override
+    {
+        SendLoginDiagnostics(player);
+    }
+};
+
 class PlayerbotBetterSetupPlayerScript final : public PlayerScript
 {
 public:
     PlayerbotBetterSetupPlayerScript()
         : PlayerScript("PlayerbotBetterSetupPlayerScript",
-                       { PLAYERHOOK_CAN_PLAYER_USE_PRIVATE_CHAT,
+                       { PLAYERHOOK_CAN_PLAYER_USE_CHAT,
+                         PLAYERHOOK_CAN_PLAYER_USE_PRIVATE_CHAT,
                          PLAYERHOOK_CAN_PLAYER_USE_GROUP_CHAT,
                          PLAYERHOOK_CAN_PLAYER_USE_GUILD_CHAT,
                          PLAYERHOOK_CAN_PLAYER_USE_CHANNEL_CHAT })
     {
+    }
+
+    /* Generic chat path (say/yell/emote-like). */
+
+    bool OnPlayerCanUseChat(Player* player, uint32 /*type*/, uint32 /*language*/, std::string& msg) override
+    {
+        if (!player)
+            return true;
+
+        ProcessSelfCommands(player, msg);
+        return true;
     }
 
     /* Whisper path: direct one-bot control. */
@@ -1318,6 +1647,8 @@ public:
     {
         if (!player || !receiver)
             return true;
+
+        ProcessSelfCommands(player, msg);
 
         if (!GET_PLAYERBOT_AI(receiver))
             return true;
@@ -1333,6 +1664,8 @@ public:
         if (!player || !group)
             return true;
 
+        ProcessSelfCommands(player, msg);
+
         ProcessTargets(player, type, msg, CollectGroupBots(group));
         return true;
     }
@@ -1343,6 +1676,8 @@ public:
     {
         if (!player || !guild || type != CHAT_MSG_GUILD)
             return true;
+
+        ProcessSelfCommands(player, msg);
 
         ProcessTargets(player, type, msg, CollectGuildBots(player));
         return true;
@@ -1355,6 +1690,8 @@ public:
         if (!player || !channel)
             return true;
 
+        ProcessSelfCommands(player, msg);
+
         ProcessTargets(player, type, msg, CollectChannelBots(player, channel));
         return true;
     }
@@ -1364,5 +1701,6 @@ public:
 
 void AddPlayerbotBetterSetupScripts()
 {
+    new PlayerbotBetterSetupLoginScript();
     new PlayerbotBetterSetupPlayerScript();
 }

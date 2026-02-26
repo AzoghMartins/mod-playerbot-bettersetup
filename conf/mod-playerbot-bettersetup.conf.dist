@@ -54,10 +54,31 @@
 #
 #    PlayerbotBetterSetup.Spec.GearMasterIlvlRatioRndBots
 #    PlayerbotBetterSetup.Spec.GearMasterIlvlRatioAltBots
-#        Description: Ratio applied to commanding player's mixed item level
+#        Description: Ratio applied to commanding player's average item level
 #                     when GearMode* = master_ilvl_ratio.
 #                     If master ilvl context is invalid, falls back to top_for_level.
 #        Default:     1.0
+#
+#    PlayerbotBetterSetup.Spec.GearValidationLowerRatio
+#    PlayerbotBetterSetup.Spec.GearValidationUpperRatio
+#        Description: Accepted range for equipped item levels around target ilvl.
+#                     itemLevel must be within [target*lower, target*upper].
+#        Default:     0.85 / 1.15
+#
+#    PlayerbotBetterSetup.Spec.GearRetryCount
+#        Description: Number of full regear attempts in ratio mode before settling.
+#        Default:     4
+#
+#    PlayerbotBetterSetup.Spec.GearQualityCapRatioMode
+#    PlayerbotBetterSetup.Spec.GearQualityCapTopForLevel
+#        Description: Item quality ceiling used by gearing passes.
+#                     1 = normal, 2 = uncommon, 3 = rare, 4 = epic, 5 = legendary
+#        Default:     4 / 5
+#
+#    PlayerbotBetterSetup.LoginDiagnostics.Enable
+#        Description: Show module status/target-ilvl diagnostics in chat on login.
+#        Default:     0 - Disabled
+#                     1 - Enabled
 #
 
 PlayerbotBetterSetup.Spec.Enable = 1
@@ -74,3 +95,12 @@ PlayerbotBetterSetup.Spec.GearModeAltBots = master_ilvl_ratio
 
 PlayerbotBetterSetup.Spec.GearMasterIlvlRatioRndBots = 1.0
 PlayerbotBetterSetup.Spec.GearMasterIlvlRatioAltBots = 1.0
+
+PlayerbotBetterSetup.Spec.GearValidationLowerRatio = 0.85
+PlayerbotBetterSetup.Spec.GearValidationUpperRatio = 1.15
+PlayerbotBetterSetup.Spec.GearRetryCount = 4
+
+PlayerbotBetterSetup.Spec.GearQualityCapRatioMode = 4
+PlayerbotBetterSetup.Spec.GearQualityCapTopForLevel = 5
+
+PlayerbotBetterSetup.LoginDiagnostics.Enable = 1
