@@ -7,16 +7,22 @@
 #include "Chat.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
+#include "DBCStores.h"
 #include "Item.h"
+#include "ObjectMgr.h"
 #include "Player.h"
 #include "Random.h"
 #include "ScriptMgr.h"
+#include "SpellMgr.h"
 
 #include "ChatFilter.h"
 #include "PlayerbotAI.h"
 #include "PlayerbotAIConfig.h"
 #include "PlayerbotFactory.h"
+#include "PlayerbotRepository.h"
 #include "Playerbots.h"
+#include "RandomItemMgr.h"
+#include "StatsWeightCalculator.h"
 
 #include <algorithm>
 #include <cctype>
@@ -943,6 +949,28 @@ bool IsRndOrAddclassBot(Player* bot)
     return sRandomPlayerbotMgr.IsRandomBot(bot) || sRandomPlayerbotMgr.IsAddclassBot(bot);
 }
 
+bool IsAddclassBot(Player* bot)
+{
+    return sRandomPlayerbotMgr.IsAddclassBot(bot);
+}
+
+/* Keep addclass bots in lockstep with the command sender's level before specing. */
+
+void SyncAddclassBotLevel(Player* bot, Player* commandSender)
+{
+    if (!bot || !commandSender || !IsAddclassBot(bot))
+        return;
+
+    uint8 const targetLevel = commandSender->GetLevel();
+    if (bot->GetLevel() == targetLevel)
+        return;
+
+    bot->CombatStop(true);
+    bot->GiveLevel(targetLevel);
+    bot->SetUInt32Value(PLAYER_XP, 0);
+    bot->InitStatsForLevel(true);
+}
+
 /* Gear policy:
  * - rnd/addclass: config toggle controls automatic gearing.
  * - altbots: only gear when command asks for it ("gear") and config allows it.
@@ -1037,6 +1065,254 @@ bool IsGearWithinTargetBand(Player* bot, float targetAverageIlvl, ModuleConfig c
     return true;
 }
 
+bool IsPrimaryArmorSlot(uint8 slot)
+{
+    switch (slot)
+    {
+        case EQUIPMENT_SLOT_HEAD:
+        case EQUIPMENT_SLOT_SHOULDERS:
+        case EQUIPMENT_SLOT_CHEST:
+        case EQUIPMENT_SLOT_WAIST:
+        case EQUIPMENT_SLOT_LEGS:
+        case EQUIPMENT_SLOT_FEET:
+        case EQUIPMENT_SLOT_WRISTS:
+        case EQUIPMENT_SLOT_HANDS:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool IsTierArmorSubClass(uint32 subClass)
+{
+    return subClass == ITEM_SUBCLASS_ARMOR_PLATE || subClass == ITEM_SUBCLASS_ARMOR_MAIL ||
+           subClass == ITEM_SUBCLASS_ARMOR_LEATHER || subClass == ITEM_SUBCLASS_ARMOR_CLOTH;
+}
+
+uint32 GetPreferredArmorSubClass(Player* bot)
+{
+    if (bot->HasSkill(SKILL_PLATE_MAIL))
+        return ITEM_SUBCLASS_ARMOR_PLATE;
+
+    if (bot->HasSkill(SKILL_MAIL))
+        return ITEM_SUBCLASS_ARMOR_MAIL;
+
+    if (bot->HasSkill(SKILL_LEATHER))
+        return ITEM_SUBCLASS_ARMOR_LEATHER;
+
+    return ITEM_SUBCLASS_ARMOR_CLOTH;
+}
+
+std::vector<InventoryType> GetArmorInventoryTypesForSlot(uint8 slot)
+{
+    switch (slot)
+    {
+        case EQUIPMENT_SLOT_HEAD:
+            return { INVTYPE_HEAD };
+        case EQUIPMENT_SLOT_SHOULDERS:
+            return { INVTYPE_SHOULDERS };
+        case EQUIPMENT_SLOT_CHEST:
+            return { INVTYPE_CHEST, INVTYPE_ROBE };
+        case EQUIPMENT_SLOT_WAIST:
+            return { INVTYPE_WAIST };
+        case EQUIPMENT_SLOT_LEGS:
+            return { INVTYPE_LEGS };
+        case EQUIPMENT_SLOT_FEET:
+            return { INVTYPE_FEET };
+        case EQUIPMENT_SLOT_WRISTS:
+            return { INVTYPE_WRISTS };
+        case EQUIPMENT_SLOT_HANDS:
+            return { INVTYPE_HANDS };
+        default:
+            return {};
+    }
+}
+
+bool PassesExpansionLimitFilter(Player* bot, uint32 itemId)
+{
+    if (!sPlayerbotAIConfig.limitGearExpansion)
+        return true;
+
+    if (bot->GetLevel() <= 60 && itemId >= 23728)
+        return false;
+
+    if (bot->GetLevel() <= 70 && itemId >= 35570 && itemId != 36737 && itemId != 37739 && itemId != 37740)
+        return false;
+
+    return true;
+}
+
+bool CanEquipUnseenItemForModule(Player* bot, uint8 slot, uint16& dest, uint32 itemId)
+{
+    dest = 0;
+
+    if (Item* testItem = Item::CreateItem(itemId, 1, bot, false, 0, true))
+    {
+        PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
+        InventoryResult result = botAI ? botAI->CanEquipItem(slot, dest, testItem, true, true)
+                                       : bot->CanEquipItem(slot, dest, testItem, true, true);
+        testItem->RemoveFromUpdateQueueOf(bot);
+        delete testItem;
+        return result == EQUIP_ERR_OK;
+    }
+
+    return false;
+}
+
+void EquipPreferredArmorForSlot(Player* bot, StatsWeightCalculator& calculator, uint8 slot, uint32 preferredSubClass,
+                                uint32 gearScoreLimit, uint32 qualityLimit)
+{
+    std::vector<InventoryType> const inventoryTypes = GetArmorInventoryTypesForSlot(slot);
+    if (inventoryTypes.empty())
+        return;
+
+    int32 const level = static_cast<int32>(bot->GetLevel());
+    int32 const minLevel = std::max(level - std::min(level, 10), 1);
+
+    float bestScore = -1.0f;
+    uint32 bestItemId = 0;
+    uint16 bestDest = 0;
+
+    for (int32 requiredLevel = level; requiredLevel >= minLevel; --requiredLevel)
+    {
+        for (InventoryType inventoryType : inventoryTypes)
+        {
+            for (uint32 itemId : sRandomItemMgr.GetCachedEquipments(requiredLevel, inventoryType))
+            {
+                if (!PassesExpansionLimitFilter(bot, itemId))
+                    continue;
+
+                ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
+                if (!proto)
+                    continue;
+
+                if (proto->Class != ITEM_CLASS_ARMOR || proto->SubClass != preferredSubClass)
+                    continue;
+
+                if (!IsTierArmorSubClass(proto->SubClass))
+                    continue;
+
+                if (proto->Quality > qualityLimit)
+                    continue;
+
+                if (proto->RequiredLevel > bot->GetLevel() || proto->Duration != 0 || proto->Bonding == BIND_QUEST_ITEM)
+                    continue;
+
+                if (gearScoreLimit != 0 && PlayerbotFactory::CalcMixedGearScore(proto->ItemLevel, proto->Quality) > gearScoreLimit)
+                    continue;
+
+                uint16 dest = 0;
+                if (!CanEquipUnseenItemForModule(bot, slot, dest, itemId))
+                    continue;
+
+                float const score = calculator.CalculateItem(itemId);
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestItemId = itemId;
+                    bestDest = dest;
+                }
+            }
+        }
+    }
+
+    if (bestItemId == 0)
+        return;
+
+    if (Item* oldItem = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+        bot->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+
+    if (bot->EquipNewItem(bestDest, bestItemId, true))
+        bot->AutoUnequipOffhandIfNeed();
+}
+
+/* Enforce strict armor tier preference for core armor slots.
+ * Priority is highest wearable tier: plate > mail > leather > cloth.
+ */
+
+void EnforcePreferredArmorTier(Player* bot, uint32 gearScoreLimit, uint32 qualityLimit)
+{
+    if (!bot)
+        return;
+
+    uint32 const preferredSubClass = GetPreferredArmorSubClass(bot);
+    StatsWeightCalculator calculator(bot);
+
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        if (!IsPrimaryArmorSlot(slot))
+            continue;
+
+        bool needsPreferred = false;
+
+        if (Item* equipped = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+        {
+            ItemTemplate const* proto = equipped->GetTemplate();
+            if (proto && proto->Class == ITEM_CLASS_ARMOR && IsTierArmorSubClass(proto->SubClass) &&
+                proto->SubClass != preferredSubClass)
+            {
+                bot->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+                needsPreferred = true;
+            }
+        }
+        else
+        {
+            needsPreferred = true;
+        }
+
+        if (needsPreferred)
+            EquipPreferredArmorForSlot(bot, calculator, slot, preferredSubClass, gearScoreLimit, qualityLimit);
+    }
+}
+
+/* Remove spare gear generated during rerolls from backpack/bags.
+ * Keeps equipped items intact and prevents random armor clutter.
+ */
+
+void CleanupBagGear(Player* bot)
+{
+    if (!bot)
+        return;
+
+    struct SlotPos
+    {
+        uint8 bag;
+        uint8 slot;
+    };
+
+    std::vector<SlotPos> toDestroy;
+
+    for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+    {
+        if (Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+        {
+            ItemTemplate const* proto = item->GetTemplate();
+            if (proto && (proto->Class == ITEM_CLASS_ARMOR || proto->Class == ITEM_CLASS_WEAPON))
+                toDestroy.push_back({ INVENTORY_SLOT_BAG_0, slot });
+        }
+    }
+
+    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+    {
+        Bag* bag = static_cast<Bag*>(bot->GetItemByPos(INVENTORY_SLOT_BAG_0, bagSlot));
+        if (!bag)
+            continue;
+
+        for (uint8 slot = 0; slot < bag->GetBagSize(); ++slot)
+        {
+            if (Item* item = bag->GetItemByPos(slot))
+            {
+                ItemTemplate const* proto = item->GetTemplate();
+                if (proto && (proto->Class == ITEM_CLASS_ARMOR || proto->Class == ITEM_CLASS_WEAPON))
+                    toDestroy.push_back({ bagSlot, slot });
+            }
+        }
+    }
+
+    for (SlotPos const& pos : toDestroy)
+        bot->DestroyItem(pos.bag, pos.slot, true);
+}
+
 /* One gearing pass (equipment/ammo/enchants/repair) with a chosen cap.
  * cap == 0 means top-for-level mode.
  */
@@ -1045,11 +1321,13 @@ void RunGearPass(Player* bot, uint32 gearScoreLimit, uint32 qualityLimit)
 {
     PlayerbotFactory factory(bot, bot->GetLevel(), qualityLimit, gearScoreLimit);
     factory.InitEquipment(false, true);
+    EnforcePreferredArmorTier(bot, gearScoreLimit, qualityLimit);
     factory.InitAmmo();
 
     if (bot->GetLevel() >= sPlayerbotAIConfig.minEnchantingBotLevel)
         factory.ApplyEnchantAndGemsNew();
 
+    CleanupBagGear(bot);
     bot->DurabilityRepairAll(false, 1.0f, false);
 }
 
@@ -1113,10 +1391,10 @@ void ApplyAutoGear(Player* bot, Player* commandSender, ModuleConfig const& confi
 }
 
 /* Maintenance pass after talents:
- * glyphs, consumables, pet init/talents, and spell book refresh.
+ * glyphs, consumables, and pet init/talents.
  */
 
-void RunPostSpecRefresh(Player* bot, ExpansionCap cap)
+void RunPostSpecMaintenance(Player* bot, ExpansionCap cap)
 {
     PlayerbotFactory factory(bot, bot->GetLevel());
 
@@ -1134,12 +1412,89 @@ void RunPostSpecRefresh(Player* bot, ExpansionCap cap)
 
     if (cap == ExpansionCap::Wrath || !sPlayerbotAIConfig.limitTalentsExpansion)
         factory.InitPetTalents();
+}
 
-    /* Final spell sweeps repopulate class, available, and special spell lists. */
+bool IsTalentLockedQuestReward(Player* bot, Quest const* quest)
+{
+    if (!bot || !quest)
+        return false;
 
+    int32 const spellId = quest->GetRewSpellCast();
+    if (!spellId)
+        return false;
+
+    SpellInfo const* rewardSpell = sSpellMgr->GetSpellInfo(spellId);
+    if (!rewardSpell)
+        return false;
+
+    for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
+    {
+        if (rewardSpell->Effects[i].Effect != SPELL_EFFECT_LEARN_SPELL || !rewardSpell->Effects[i].TriggerSpell)
+            continue;
+
+        uint32 firstRank = sSpellMgr->GetFirstSpellInChain(rewardSpell->Effects[i].TriggerSpell);
+        if (!firstRank)
+            firstRank = rewardSpell->Effects[i].TriggerSpell;
+
+        bool const talentDependent = GetTalentSpellCost(firstRank) > 0 || sSpellMgr->IsAdditionalTalentSpell(firstRank);
+        if (talentDependent && !bot->HasSpell(rewardSpell->Effects[i].TriggerSpell))
+            return true;
+    }
+
+    return false;
+}
+
+/* Learn class quest reward spells by reusing the same Player quest-reward learner. */
+
+void LearnQuestClassSpells(Player* bot)
+{
+    if (!bot)
+        return;
+
+    ObjectMgr::QuestMap const& questTemplates = sObjectMgr->GetQuestTemplates();
+    for (ObjectMgr::QuestMap::const_iterator itr = questTemplates.begin(); itr != questTemplates.end(); ++itr)
+    {
+        Quest const* quest = itr->second;
+        if (!quest || !quest->GetRequiredClasses())
+            continue;
+
+        if (quest->IsRepeatable() || quest->GetMinLevel() < 10 || quest->GetMinLevel() > bot->GetLevel())
+            continue;
+
+        if (!bot->SatisfyQuestClass(quest, false) || !bot->SatisfyQuestRace(quest, false) || !bot->SatisfyQuestSkill(quest, false))
+            continue;
+
+        if (IsTalentLockedQuestReward(bot, quest))
+            continue;
+
+        bot->learnQuestRewardedSpells(quest);
+    }
+}
+
+/* Spell pass aligned with existing playerbot setup flows. */
+
+void LearnSpellsForCurrentLevel(Player* bot)
+{
+    if (!bot)
+        return;
+
+    PlayerbotFactory factory(bot, bot->GetLevel());
     factory.InitClassSpells();
     factory.InitAvailableSpells();
+    LearnQuestClassSpells(bot);
     factory.InitSpecialSpells();
+}
+
+/* Reuse the same internals as chat commands "reset" and "reset botAI". */
+
+void ResetBotAIAndActions(PlayerbotAI* botAI)
+{
+    if (!botAI)
+        return;
+
+    botAI->Reset(true);
+    PlayerbotRepository::instance().Reset(botAI);
+    botAI->ResetStrategies(false);
 }
 
 struct CommandResult
@@ -1270,7 +1625,9 @@ bool ProcessSpecForBot(Player* commandSender, uint32 chatType, std::string const
             continue;
         }
 
-        /* Stage 6: apply talents, run maintenance, and optionally auto-gear. */
+        /* Stage 6: apply workflow steps (level sync for addclass, talents, gear, spells, AI reset). */
+
+        SyncAddclassBotLevel(bot, commandSender);
 
         ExpansionCap const cap = ResolveExpansionCap(bot, commandSender, config);
 
@@ -1281,11 +1638,13 @@ bool ProcessSpecForBot(Player* commandSender, uint32 chatType, std::string const
             continue;
         }
 
-        botAI->ResetStrategies();
-        RunPostSpecRefresh(bot, cap);
+        RunPostSpecMaintenance(bot, cap);
 
         if (ShouldAutoGear(bot, spec.gearRequested, config))
             ApplyAutoGear(bot, commandSender, config);
+
+        LearnSpellsForCurrentLevel(bot);
+        ResetBotAIAndActions(botAI);
 
         result.updated++;
     }
@@ -1474,14 +1833,7 @@ void ApplyGearSelf(Player* player)
 
     for (uint8 attempt = 0; attempt < 6; ++attempt)
     {
-        PlayerbotFactory factory(player, player->GetLevel(), ITEM_QUALITY_LEGENDARY, gearScoreLimit);
-        factory.InitEquipment(false);
-        factory.InitAmmo();
-
-        if (player->GetLevel() >= sPlayerbotAIConfig.minEnchantingBotLevel)
-            factory.ApplyEnchantAndGemsNew();
-
-        player->DurabilityRepairAll(false, 1.0f, false);
+        RunGearPass(player, gearScoreLimit, ITEM_QUALITY_LEGENDARY);
 
         uint32 const currentIlvl = static_cast<uint32>(player->GetAverageItemLevelForDF());
         if (currentIlvl == targetIlvl || currentIlvl == 0)
