@@ -25,6 +25,7 @@ Use normal playerbot chat channels and prefixes.
 - `spec <profile>`
 - `spec <profile> gear`
 - `gearself` (minimum account level is configurable)
+- `.specplayer <name> <spec> <level> [skill1] [skill2]` (GM command, account level >= 2; offline targets are queued)
 
 Examples:
 
@@ -35,6 +36,8 @@ Examples:
 - `spec dps gear`
 - `@group2 @warrior spec tank`
 - `@group2 @warrior spec dps gear`
+- `.specplayer Farsong marksman 60`
+- `.specplayer Farsong marksman 60 skinning leatherworking`
 
 ### `spec` behavior
 
@@ -56,6 +59,15 @@ Examples:
 - Requires account level at or above `PlayerbotBetterSetup.GearSelf.MinSecurityLevel`.
 - Targets average ilvl approximately to character level.
 - Intended for testing/master setup convenience.
+
+### `.specplayer`
+
+- GM command for applying this module's spec workflow to a player character by name.
+- Requires account level `2` or higher.
+- If the target is offline, the request is queued and applied automatically at that character's next login.
+- Optional `skill1` + `skill2` override primary professions (must provide both).
+- Applies level, talents/spec, post-spec maintenance, spell refresh, and `gearself`-style gear pass.
+- Sets all known non-language skills to `level * 5` after setup.
 
 ## Expansion Source Logic
 

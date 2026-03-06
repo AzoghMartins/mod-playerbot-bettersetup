@@ -5,6 +5,7 @@
 #include "Channel.h"
 #include "ChannelMgr.h"
 #include "Chat.h"
+#include "CommandScript.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
@@ -14,6 +15,7 @@
 #include "Random.h"
 #include "ScriptMgr.h"
 #include "SpellMgr.h"
+#include "World.h"
 
 #include "ChatFilter.h"
 #include "PlayerbotAI.h"
@@ -25,8 +27,10 @@
 #include "StatsWeightCalculator.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <set>
 #include <sstream>
@@ -61,6 +65,7 @@ constexpr char const* CONF_GEAR_QUALITY_CAP_RATIO_MODE = "PlayerbotBetterSetup.S
 constexpr char const* CONF_GEAR_QUALITY_CAP_TOP_FOR_LEVEL = "PlayerbotBetterSetup.Spec.GearQualityCapTopForLevel";
 constexpr char const* CONF_LOGIN_DIAGNOSTICS_ENABLE = "PlayerbotBetterSetup.LoginDiagnostics.Enable";
 constexpr char const* CONF_GEARSELF_MIN_SECURITY = "PlayerbotBetterSetup.GearSelf.MinSecurityLevel";
+constexpr char const* OFFLINE_SPECPLAYER_SOURCE = "mod-playerbot-bettersetup-specplayer";
 
 /* These helpers do the civil-service work:
  * players speak in accents, shortcuts, and optimism; code wants exact tokens.
@@ -151,6 +156,173 @@ std::string JoinWords(std::vector<std::string> const& words, size_t from)
     }
 
     return out.str();
+}
+
+using ProfessionPair = std::pair<uint16, uint16>;
+
+std::array<uint16, 11> const& GetPrimaryProfessionSkillIds()
+{
+    static std::array<uint16, 11> primaryProfessionSkillIds = {
+        SKILL_ALCHEMY,
+        SKILL_BLACKSMITHING,
+        SKILL_ENCHANTING,
+        SKILL_ENGINEERING,
+        SKILL_HERBALISM,
+        SKILL_INSCRIPTION,
+        SKILL_JEWELCRAFTING,
+        SKILL_LEATHERWORKING,
+        SKILL_MINING,
+        SKILL_SKINNING,
+        SKILL_TAILORING
+    };
+
+    return primaryProfessionSkillIds;
+}
+
+std::unordered_map<std::string, uint16> const& GetProfessionAliases()
+{
+    static std::unordered_map<std::string, uint16> aliases = {
+        { "alchemy", SKILL_ALCHEMY },
+        { "alch", SKILL_ALCHEMY },
+        { "blacksmithing", SKILL_BLACKSMITHING },
+        { "blacksmith", SKILL_BLACKSMITHING },
+        { "bs", SKILL_BLACKSMITHING },
+        { "enchanting", SKILL_ENCHANTING },
+        { "ench", SKILL_ENCHANTING },
+        { "engineering", SKILL_ENGINEERING },
+        { "eng", SKILL_ENGINEERING },
+        { "herbalism", SKILL_HERBALISM },
+        { "herb", SKILL_HERBALISM },
+        { "inscription", SKILL_INSCRIPTION },
+        { "insc", SKILL_INSCRIPTION },
+        { "jewelcrafting", SKILL_JEWELCRAFTING },
+        { "jewel", SKILL_JEWELCRAFTING },
+        { "jc", SKILL_JEWELCRAFTING },
+        { "leatherworking", SKILL_LEATHERWORKING },
+        { "lw", SKILL_LEATHERWORKING },
+        { "mining", SKILL_MINING },
+        { "mine", SKILL_MINING },
+        { "skinning", SKILL_SKINNING },
+        { "skin", SKILL_SKINNING },
+        { "tailoring", SKILL_TAILORING },
+        { "tailor", SKILL_TAILORING },
+        { "tail", SKILL_TAILORING }
+    };
+
+    return aliases;
+}
+
+std::string ProfessionSkillToName(uint16 skillId)
+{
+    switch (skillId)
+    {
+        case SKILL_ALCHEMY:
+            return "alchemy";
+        case SKILL_BLACKSMITHING:
+            return "blacksmithing";
+        case SKILL_ENCHANTING:
+            return "enchanting";
+        case SKILL_ENGINEERING:
+            return "engineering";
+        case SKILL_HERBALISM:
+            return "herbalism";
+        case SKILL_INSCRIPTION:
+            return "inscription";
+        case SKILL_JEWELCRAFTING:
+            return "jewelcrafting";
+        case SKILL_LEATHERWORKING:
+            return "leatherworking";
+        case SKILL_MINING:
+            return "mining";
+        case SKILL_SKINNING:
+            return "skinning";
+        case SKILL_TAILORING:
+            return "tailoring";
+        default:
+            return "unknown";
+    }
+}
+
+std::string BuildProfessionListMessage()
+{
+    return "Valid profession skills: alchemy, blacksmithing, enchanting, engineering, herbalism, inscription, jewelcrafting, leatherworking, mining, skinning, tailoring.";
+}
+
+bool ResolveProfessionSkill(std::string const& token, uint16& skillId)
+{
+    std::string const normalized = NormalizeToken(token);
+    auto const it = GetProfessionAliases().find(normalized);
+    if (it == GetProfessionAliases().end())
+        return false;
+
+    skillId = it->second;
+    return true;
+}
+
+uint16 ComputeLevelSkillCap(Player* player)
+{
+    if (!player)
+        return 1;
+
+    uint32 const cap = uint32(player->GetLevel()) * 5u;
+    return static_cast<uint16>(std::clamp<uint32>(cap, 1u, std::numeric_limits<uint16>::max()));
+}
+
+uint16 GetSkillStepForValue(uint16 value)
+{
+    if (value <= 75)
+        return 1;
+    if (value <= 150)
+        return 2;
+    if (value <= 225)
+        return 3;
+    if (value <= 300)
+        return 4;
+    if (value <= 375)
+        return 5;
+
+    return 6;
+}
+
+bool ParseRequestedProfessions(Optional<std::string> skill1Arg,
+                               Optional<std::string> skill2Arg,
+                               ProfessionPair& professions, std::string& errorMessage)
+{
+    professions = { 0, 0 };
+
+    bool const hasSkill1 = skill1Arg.has_value();
+    bool const hasSkill2 = skill2Arg.has_value();
+    if (!hasSkill1 && !hasSkill2)
+        return true;
+
+    if (!hasSkill1 || !hasSkill2)
+    {
+        errorMessage = "provide both skill1 and skill2, or omit both.";
+        return false;
+    }
+
+    uint16 firstSkill = 0;
+    uint16 secondSkill = 0;
+    if (!ResolveProfessionSkill(*skill1Arg, firstSkill))
+    {
+        errorMessage = "unknown skill1 '" + *skill1Arg + "'. " + BuildProfessionListMessage();
+        return false;
+    }
+
+    if (!ResolveProfessionSkill(*skill2Arg, secondSkill))
+    {
+        errorMessage = "unknown skill2 '" + *skill2Arg + "'. " + BuildProfessionListMessage();
+        return false;
+    }
+
+    if (firstSkill == secondSkill)
+    {
+        errorMessage = "skill1 and skill2 must be different professions.";
+        return false;
+    }
+
+    professions = { firstSkill, secondSkill };
+    return true;
 }
 
 struct ModuleConfig
@@ -547,10 +719,10 @@ std::string FormatCanonicalName(std::string const& canonical)
     return name;
 }
 
-std::string BuildSpecListMessage(Player* bot)
+std::string BuildSpecListMessageForClass(uint8 classId)
 {
     auto const& profiles = GetClassSpecProfiles();
-    auto const profileIt = profiles.find(bot->getClass());
+    auto const profileIt = profiles.find(classId);
     if (profileIt == profiles.end())
         return "No spec profile is defined for this class.";
 
@@ -614,6 +786,14 @@ std::string BuildSpecListMessage(Player* bot)
 
     message << "Exact: " << exact.str() << '.';
     return message.str();
+}
+
+std::string BuildSpecListMessage(Player* bot)
+{
+    if (!bot)
+        return "No spec profile is defined for this class.";
+
+    return BuildSpecListMessageForClass(bot->getClass());
 }
 
 struct ParsedSpecCommand
@@ -694,10 +874,10 @@ struct ResolvedSpec
  * The random branch is intentionally fair; fate should at least be evenly distributed.
  */
 
-bool ResolveRequestedSpec(Player* bot, std::string const& requestedProfile, ResolvedSpec& resolved)
+bool ResolveRequestedSpec(uint8 classId, std::string const& requestedProfile, ResolvedSpec& resolved)
 {
     auto const& profiles = GetClassSpecProfiles();
-    auto const profileIt = profiles.find(bot->getClass());
+    auto const profileIt = profiles.find(classId);
     if (profileIt == profiles.end())
         return false;
 
@@ -732,6 +912,11 @@ bool ResolveRequestedSpec(Player* bot, std::string const& requestedProfile, Reso
     resolved.definition = FindSpecDefinition(profile, selectedCanonical);
     resolved.fromRole = true;
     return resolved.definition != nullptr;
+}
+
+bool ResolveRequestedSpec(Player* bot, std::string const& requestedProfile, ResolvedSpec& resolved)
+{
+    return bot && ResolveRequestedSpec(bot->getClass(), requestedProfile, resolved);
 }
 
 enum class ExpansionCap
@@ -1906,6 +2091,375 @@ void ProcessSelfCommands(Player* commandSender, std::string const& originalMessa
     }
 }
 
+bool ParseOfflineSpecPlayerData(std::string const& data, std::string& canonicalSpec, uint8& level, ProfessionPair& professions)
+{
+    std::vector<std::string> tokens;
+    std::stringstream stream(data);
+    std::string token;
+
+    while (std::getline(stream, token, '|'))
+        tokens.push_back(token);
+
+    if (tokens.size() != 2 && tokens.size() != 4)
+        return false;
+
+    canonicalSpec = tokens[0];
+    if (canonicalSpec.empty())
+        return false;
+
+    std::stringstream levelStream(tokens[1]);
+    uint32 parsedLevel = 0;
+    if (!(levelStream >> parsedLevel))
+        return false;
+
+    if (parsedLevel < 1 || parsedLevel > 255)
+        return false;
+
+    level = static_cast<uint8>(parsedLevel);
+
+    professions = { 0, 0 };
+    if (tokens.size() == 4)
+    {
+        uint32 first = 0;
+        uint32 second = 0;
+
+        std::stringstream firstStream(tokens[2]);
+        std::stringstream secondStream(tokens[3]);
+        if (!(firstStream >> first) || !(secondStream >> second))
+            return false;
+
+        if (first > std::numeric_limits<uint16>::max() || second > std::numeric_limits<uint16>::max())
+            return false;
+
+        professions = { static_cast<uint16>(first), static_cast<uint16>(second) };
+    }
+
+    return true;
+}
+
+bool LoadOfflineSpecPlayerRequest(ObjectGuid::LowType guidLow, std::string& canonicalSpec, uint8& level, ProfessionPair& professions)
+{
+    QueryResult result = CharacterDatabase.Query(
+        "SELECT data FROM character_settings WHERE guid = {} AND source = '{}' LIMIT 1",
+        guidLow, OFFLINE_SPECPLAYER_SOURCE);
+
+    if (!result)
+        return false;
+
+    std::string const data = (*result)[0].Get<std::string>();
+    return ParseOfflineSpecPlayerData(data, canonicalSpec, level, professions);
+}
+
+void SaveOfflineSpecPlayerRequest(ObjectGuid::LowType guidLow, std::string const& canonicalSpec, uint8 level, ProfessionPair professions)
+{
+    std::string const data = canonicalSpec + "|" + std::to_string(uint32(level)) + "|" +
+                             std::to_string(uint32(professions.first)) + "|" +
+                             std::to_string(uint32(professions.second));
+    CharacterDatabase.Execute(
+        "REPLACE INTO character_settings (guid, source, data) VALUES ({}, '{}', '{}')",
+        guidLow, OFFLINE_SPECPLAYER_SOURCE, data);
+}
+
+void ClearOfflineSpecPlayerRequest(ObjectGuid::LowType guidLow)
+{
+    CharacterDatabase.Execute(
+        "DELETE FROM character_settings WHERE guid = {} AND source = '{}'",
+        guidLow, OFFLINE_SPECPLAYER_SOURCE);
+}
+
+void ApplyRequestedPrimaryProfessions(Player* target, ProfessionPair professions)
+{
+    if (!target || (professions.first == 0 && professions.second == 0))
+        return;
+
+    for (uint16 skillId : GetPrimaryProfessionSkillIds())
+    {
+        if (target->HasSkill(skillId))
+            target->SetSkill(skillId, 0, 0, 0);
+    }
+
+    uint16 const skillCap = ComputeLevelSkillCap(target);
+    uint16 const step = GetSkillStepForValue(skillCap);
+
+    target->SetSkill(professions.first, step, skillCap, skillCap);
+    target->SetSkill(professions.second, step, skillCap, skillCap);
+}
+
+void NormalizeKnownSkillsToLevelCap(Player* target)
+{
+    if (!target)
+        return;
+
+    uint16 const skillCap = ComputeLevelSkillCap(target);
+
+    for (uint32 skillId = 1; skillId < sSkillLineStore.GetNumRows(); ++skillId)
+    {
+        SkillLineEntry const* skillLine = sSkillLineStore.LookupEntry(skillId);
+        if (!skillLine || !target->HasSkill(skillId))
+            continue;
+
+        if (skillLine->categoryId == SKILL_CATEGORY_LANGUAGES)
+            continue;
+
+        uint16 step = target->GetSkillStep(static_cast<uint16>(skillId));
+        if (step == 0)
+            step = 1;
+
+        target->SetSkill(static_cast<uint16>(skillId), step, skillCap, skillCap);
+    }
+}
+
+bool ApplySpecPlayerSetup(Player* target, std::string const& requestedProfile, uint8 targetLevel, ModuleConfig const& config,
+                          ProfessionPair professions, std::string& appliedCanonical, std::string& errorMessage)
+{
+    if (!target)
+    {
+        errorMessage = "target player is not available.";
+        return false;
+    }
+
+    ResolvedSpec resolved;
+    if (!ResolveRequestedSpec(target, requestedProfile, resolved) || !resolved.definition)
+    {
+        errorMessage = "invalid profile '" + requestedProfile + "' for " + target->GetName() + ". " + BuildSpecListMessage(target);
+        return false;
+    }
+
+    int specNo = FindSpecNoForDefinition(target->getClass(), *resolved.definition);
+    if (specNo < 0)
+    {
+        errorMessage = "no matching premade template found for '" + FormatCanonicalName(resolved.definition->canonical) +
+                       "' on " + target->GetName() + '.';
+        return false;
+    }
+
+    target->CombatStop(true);
+    target->GiveLevel(targetLevel);
+    target->InitTalentForLevel();
+    target->SetUInt32Value(PLAYER_XP, 0);
+
+    ExpansionCap const cap = ResolveExpansionCap(target, target, config);
+    if (!ApplySpecTalents(target, specNo, cap))
+    {
+        errorMessage = "failed to apply spec for " + target->GetName() + '.';
+        return false;
+    }
+
+    RunPostSpecMaintenance(target, cap);
+    LearnSpellsForCurrentLevel(target);
+    ApplyRequestedPrimaryProfessions(target, professions);
+    NormalizeKnownSkillsToLevelCap(target);
+    ApplyGearSelf(target);
+
+    if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(target))
+        ResetBotAIAndActions(botAI);
+
+    appliedCanonical = resolved.definition->canonical;
+    return true;
+}
+
+void ProcessOfflineSpecPlayerOnLogin(Player* player)
+{
+    if (!player || !player->GetSession())
+        return;
+
+    std::string canonicalSpec;
+    uint8 targetLevel = 1;
+    ProfessionPair professions = { 0, 0 };
+    if (!LoadOfflineSpecPlayerRequest(player->GetGUID().GetCounter(), canonicalSpec, targetLevel, professions))
+        return;
+
+    ModuleConfig const config = LoadModuleConfig();
+
+    std::string appliedCanonical;
+    std::string errorMessage;
+    bool const applied = ApplySpecPlayerSetup(player, canonicalSpec, targetLevel, config, professions, appliedCanonical, errorMessage);
+
+    ClearOfflineSpecPlayerRequest(player->GetGUID().GetCounter());
+
+    ChatHandler handler(player->GetSession());
+    if (!applied)
+    {
+        handler.SendSysMessage("specplayer: pending offline setup failed and was discarded: " + errorMessage);
+        return;
+    }
+
+    uint32 const currentAvgIlvl = static_cast<uint32>(player->GetAverageItemLevelForDF());
+    if (professions.first != 0 && professions.second != 0)
+    {
+        handler.PSendSysMessage("specplayer: pending offline setup applied -> level {}, spec '{}', professions '{} + {}', current average ilvl {}.",
+                                uint32(player->GetLevel()),
+                                FormatCanonicalName(appliedCanonical),
+                                ProfessionSkillToName(professions.first),
+                                ProfessionSkillToName(professions.second),
+                                currentAvgIlvl);
+    }
+    else
+    {
+        handler.PSendSysMessage("specplayer: pending offline setup applied -> level {}, spec '{}', current average ilvl {}.",
+                                uint32(player->GetLevel()),
+                                FormatCanonicalName(appliedCanonical),
+                                currentAvgIlvl);
+    }
+}
+
+class PlayerbotBetterSetupCommandScript final : public CommandScript
+{
+public:
+    PlayerbotBetterSetupCommandScript()
+        : CommandScript("PlayerbotBetterSetupCommandScript")
+    {
+    }
+
+    Acore::ChatCommands::ChatCommandTable GetCommands() const override
+    {
+        static Acore::ChatCommands::ChatCommandTable commandTable =
+        {
+            { "specplayer", HandleSpecPlayerCommand, SEC_GAMEMASTER, Acore::ChatCommands::Console::No }
+        };
+
+        return commandTable;
+    }
+
+    static bool HandleSpecPlayerCommand(ChatHandler* handler, Acore::ChatCommands::PlayerIdentifier targetIdentifier,
+                                        std::string specProfile, uint32 requestedLevel,
+                                        Optional<std::string> skill1Arg,
+                                        Optional<std::string> skill2Arg)
+    {
+        if (!handler || !handler->GetSession())
+            return false;
+
+        uint8 const accountLevel = static_cast<uint8>(handler->GetSession()->GetSecurity());
+        if (accountLevel < 2)
+        {
+            handler->PSendSysMessage("specplayer: account level 2 required (current {}).", uint32(accountLevel));
+            return false;
+        }
+
+        ModuleConfig const config = LoadModuleConfig();
+        if (!config.enabled)
+        {
+            handler->SendSysMessage("specplayer: module is disabled (PlayerbotBetterSetup.Spec.Enable = 0).");
+            return false;
+        }
+
+        ProfessionPair requestedProfessions = { 0, 0 };
+        std::string professionError;
+        if (!ParseRequestedProfessions(skill1Arg, skill2Arg, requestedProfessions, professionError))
+        {
+            handler->SendSysMessage("specplayer: " + professionError);
+            return false;
+        }
+
+        Player* target = targetIdentifier.GetConnectedPlayer();
+        ObjectGuid const targetGuid = targetIdentifier.GetGUID();
+        if (target)
+        {
+            if (handler->HasLowerSecurity(target))
+                return false;
+        }
+        else if (handler->HasLowerSecurity(nullptr, targetGuid))
+            return false;
+
+        if (requestedLevel < 1)
+        {
+            handler->SendSysMessage("specplayer: level must be >= 1.");
+            return false;
+        }
+
+        uint32 const maxLevel = std::max<uint32>(1, sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL));
+        uint8 const targetLevel = static_cast<uint8>(std::clamp<uint32>(requestedLevel, 1, maxLevel));
+        if (requestedLevel != targetLevel)
+            handler->PSendSysMessage("specplayer: requested level {} clamped to {}.", requestedLevel, uint32(targetLevel));
+
+        uint8 targetClass = 0;
+        if (target)
+        {
+            targetClass = target->getClass();
+        }
+        else
+        {
+            CharacterCacheEntry const* cacheEntry = sCharacterCache->GetCharacterCacheByGuid(targetGuid);
+            if (!cacheEntry)
+            {
+                handler->PSendSysMessage("specplayer: failed to read class data for {}.", targetIdentifier.GetName());
+                return false;
+            }
+
+            targetClass = cacheEntry->Class;
+        }
+
+        ResolvedSpec resolved;
+        if (!ResolveRequestedSpec(targetClass, specProfile, resolved) || !resolved.definition)
+        {
+            handler->PSendSysMessage("specplayer: invalid profile '{}' for {}. {}",
+                                     specProfile, targetIdentifier.GetName(), BuildSpecListMessageForClass(targetClass));
+            return false;
+        }
+
+        int specNo = FindSpecNoForDefinition(targetClass, *resolved.definition);
+        if (specNo < 0)
+        {
+            handler->PSendSysMessage("specplayer: no matching premade template found for '{}' on {}.",
+                                     FormatCanonicalName(resolved.definition->canonical), targetIdentifier.GetName());
+            return false;
+        }
+
+        std::string const resolvedCanonical = resolved.definition->canonical;
+
+        if (!target)
+        {
+            SaveOfflineSpecPlayerRequest(targetGuid.GetCounter(), resolvedCanonical, targetLevel, requestedProfessions);
+            if (requestedProfessions.first != 0 && requestedProfessions.second != 0)
+            {
+                handler->PSendSysMessage("specplayer: {} is offline. queued level {}, spec '{}', professions '{} + {}' for next login.",
+                                         targetIdentifier.GetName(),
+                                         uint32(targetLevel),
+                                         FormatCanonicalName(resolvedCanonical),
+                                         ProfessionSkillToName(requestedProfessions.first),
+                                         ProfessionSkillToName(requestedProfessions.second));
+            }
+            else
+            {
+                handler->PSendSysMessage("specplayer: {} is offline. queued level {}, spec '{}' for next login.",
+                                         targetIdentifier.GetName(),
+                                         uint32(targetLevel),
+                                         FormatCanonicalName(resolvedCanonical));
+            }
+            return true;
+        }
+
+        std::string appliedCanonical;
+        std::string errorMessage;
+        if (!ApplySpecPlayerSetup(target, resolvedCanonical, targetLevel, config, requestedProfessions, appliedCanonical, errorMessage))
+        {
+            handler->SendSysMessage("specplayer: " + errorMessage);
+            return false;
+        }
+
+        uint32 const currentAvgIlvl = static_cast<uint32>(target->GetAverageItemLevelForDF());
+        if (requestedProfessions.first != 0 && requestedProfessions.second != 0)
+        {
+            handler->PSendSysMessage("specplayer: {} -> level {}, spec '{}', professions '{} + {}', current average ilvl {}.",
+                                     target->GetName(),
+                                     uint32(target->GetLevel()),
+                                     FormatCanonicalName(appliedCanonical),
+                                     ProfessionSkillToName(requestedProfessions.first),
+                                     ProfessionSkillToName(requestedProfessions.second),
+                                     currentAvgIlvl);
+        }
+        else
+        {
+            handler->PSendSysMessage("specplayer: {} -> level {}, spec '{}', current average ilvl {}.",
+                                     target->GetName(),
+                                     uint32(target->GetLevel()),
+                                     FormatCanonicalName(appliedCanonical),
+                                     currentAvgIlvl);
+        }
+        return true;
+    }
+};
+
 /* Shared login diagnostics block so one message format serves every login hook path. */
 
 void SendLoginDiagnostics(Player* player)
@@ -1971,6 +2525,7 @@ public:
 
     void OnPlayerLogin(Player* player) override
     {
+        ProcessOfflineSpecPlayerOnLogin(player);
         SendLoginDiagnostics(player);
     }
 };
@@ -2059,6 +2614,7 @@ public:
 
 void AddPlayerbotBetterSetupScripts()
 {
+    new PlayerbotBetterSetupCommandScript();
     new PlayerbotBetterSetupLoginScript();
     new PlayerbotBetterSetupPlayerScript();
 }
