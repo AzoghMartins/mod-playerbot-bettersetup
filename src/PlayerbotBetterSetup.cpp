@@ -1292,6 +1292,18 @@ bool IsGearWithinTargetBand(Player* bot, float targetAverageIlvl, ModuleConfig c
     return true;
 }
 
+bool IsItemLevelWithinTargetBand(uint32 itemLevel, float targetAverageIlvl, ModuleConfig const& config)
+{
+    if (targetAverageIlvl <= 0.0f)
+        return true;
+
+    float const lowerBound = std::max(1.0f, targetAverageIlvl * config.gearValidationLowerRatio);
+    float const upperBound = targetAverageIlvl * config.gearValidationUpperRatio;
+    float const itemLevelFloat = static_cast<float>(itemLevel);
+
+    return itemLevelFloat >= lowerBound && itemLevelFloat <= upperBound;
+}
+
 bool IsPrimaryArmorSlot(uint8 slot)
 {
     switch (slot)
@@ -1355,6 +1367,49 @@ std::vector<InventoryType> GetArmorInventoryTypesForSlot(uint8 slot)
     }
 }
 
+std::vector<InventoryType> GetInventoryTypesForSlot(uint8 slot)
+{
+    switch (slot)
+    {
+        case EQUIPMENT_SLOT_HEAD:
+            return { INVTYPE_HEAD };
+        case EQUIPMENT_SLOT_NECK:
+            return { INVTYPE_NECK };
+        case EQUIPMENT_SLOT_SHOULDERS:
+            return { INVTYPE_SHOULDERS };
+        case EQUIPMENT_SLOT_BODY:
+            return { INVTYPE_BODY };
+        case EQUIPMENT_SLOT_CHEST:
+            return { INVTYPE_CHEST, INVTYPE_ROBE };
+        case EQUIPMENT_SLOT_WAIST:
+            return { INVTYPE_WAIST };
+        case EQUIPMENT_SLOT_LEGS:
+            return { INVTYPE_LEGS };
+        case EQUIPMENT_SLOT_FEET:
+            return { INVTYPE_FEET };
+        case EQUIPMENT_SLOT_WRISTS:
+            return { INVTYPE_WRISTS };
+        case EQUIPMENT_SLOT_HANDS:
+            return { INVTYPE_HANDS };
+        case EQUIPMENT_SLOT_FINGER1:
+        case EQUIPMENT_SLOT_FINGER2:
+            return { INVTYPE_FINGER };
+        case EQUIPMENT_SLOT_TRINKET1:
+        case EQUIPMENT_SLOT_TRINKET2:
+            return { INVTYPE_TRINKET };
+        case EQUIPMENT_SLOT_BACK:
+            return { INVTYPE_CLOAK };
+        case EQUIPMENT_SLOT_MAINHAND:
+            return { INVTYPE_WEAPON, INVTYPE_2HWEAPON, INVTYPE_WEAPONMAINHAND };
+        case EQUIPMENT_SLOT_OFFHAND:
+            return { INVTYPE_WEAPON, INVTYPE_2HWEAPON, INVTYPE_WEAPONOFFHAND, INVTYPE_SHIELD, INVTYPE_HOLDABLE };
+        case EQUIPMENT_SLOT_RANGED:
+            return { INVTYPE_RANGED, INVTYPE_RANGEDRIGHT, INVTYPE_RELIC };
+        default:
+            return {};
+    }
+}
+
 bool PassesExpansionLimitFilter(Player* bot, uint32 itemId)
 {
     if (!sPlayerbotAIConfig.limitGearExpansion)
@@ -1387,7 +1442,8 @@ bool CanEquipUnseenItemForModule(Player* bot, uint8 slot, uint16& dest, uint32 i
 }
 
 void EquipPreferredArmorForSlot(Player* bot, StatsWeightCalculator& calculator, uint8 slot, uint32 preferredSubClass,
-                                uint32 gearScoreLimit, uint32 qualityLimit)
+                                uint32 gearScoreLimit, uint32 qualityLimit, float targetAverageIlvl,
+                                ModuleConfig const* config)
 {
     std::vector<InventoryType> const inventoryTypes = GetArmorInventoryTypesForSlot(slot);
     if (inventoryTypes.empty())
@@ -1425,7 +1481,7 @@ void EquipPreferredArmorForSlot(Player* bot, StatsWeightCalculator& calculator, 
                 if (proto->RequiredLevel > bot->GetLevel() || proto->Duration != 0 || proto->Bonding == BIND_QUEST_ITEM)
                     continue;
 
-                if (gearScoreLimit != 0 && PlayerbotFactory::CalcMixedGearScore(proto->ItemLevel, proto->Quality) > gearScoreLimit)
+                if (config && !IsItemLevelWithinTargetBand(proto->ItemLevel, targetAverageIlvl, *config))
                     continue;
 
                 uint16 dest = 0;
@@ -1488,7 +1544,126 @@ void EnforcePreferredArmorTier(Player* bot, uint32 gearScoreLimit, uint32 qualit
         }
 
         if (needsPreferred)
-            EquipPreferredArmorForSlot(bot, calculator, slot, preferredSubClass, gearScoreLimit, qualityLimit);
+            EquipPreferredArmorForSlot(bot, calculator, slot, preferredSubClass, gearScoreLimit, qualityLimit, 0.0f, nullptr);
+    }
+}
+
+void EnforceTargetItemLevelBand(Player* bot, uint32 gearScoreLimit, uint32 qualityLimit, float targetAverageIlvl,
+                                ModuleConfig const& config)
+{
+    if (!bot || targetAverageIlvl <= 0.0f)
+        return;
+
+    PlayerbotFactory factory(bot, bot->GetLevel(), qualityLimit, gearScoreLimit);
+    StatsWeightCalculator calculator(bot);
+    uint32 const preferredArmorSubClass = GetPreferredArmorSubClass(bot);
+    std::vector<uint8> const initSlotsOrder = {
+        EQUIPMENT_SLOT_TRINKET1, EQUIPMENT_SLOT_TRINKET2, EQUIPMENT_SLOT_MAINHAND, EQUIPMENT_SLOT_OFFHAND,
+        EQUIPMENT_SLOT_RANGED, EQUIPMENT_SLOT_HEAD, EQUIPMENT_SLOT_SHOULDERS, EQUIPMENT_SLOT_CHEST,
+        EQUIPMENT_SLOT_LEGS, EQUIPMENT_SLOT_HANDS, EQUIPMENT_SLOT_NECK, EQUIPMENT_SLOT_WAIST,
+        EQUIPMENT_SLOT_FEET, EQUIPMENT_SLOT_WRISTS, EQUIPMENT_SLOT_FINGER1, EQUIPMENT_SLOT_FINGER2,
+        EQUIPMENT_SLOT_BACK
+    };
+
+    int32 const level = static_cast<int32>(bot->GetLevel());
+    int32 const minLevel = std::max(level - std::min(level, 10), 1);
+
+    for (uint8 slot : initSlotsOrder)
+    {
+        Item* equipped = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (equipped)
+        {
+            ItemTemplate const* equippedProto = equipped->GetTemplate();
+            if (equippedProto && equippedProto->Quality > ITEM_QUALITY_NORMAL &&
+                IsItemLevelWithinTargetBand(equippedProto->ItemLevel, targetAverageIlvl, config))
+            {
+                continue;
+            }
+        }
+
+        float bestScore = -1.0f;
+        uint32 bestItemId = 0;
+        uint16 bestDest = 0;
+
+        for (int32 requiredLevel = level; requiredLevel >= minLevel; --requiredLevel)
+        {
+            for (InventoryType inventoryType : GetInventoryTypesForSlot(slot))
+            {
+                for (uint32 itemId : sRandomItemMgr.GetCachedEquipments(requiredLevel, inventoryType))
+                {
+                    if (!PassesExpansionLimitFilter(bot, itemId))
+                        continue;
+
+                    ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
+                    if (!proto)
+                        continue;
+
+                    if (proto->Class != ITEM_CLASS_WEAPON && proto->Class != ITEM_CLASS_ARMOR)
+                        continue;
+
+                    if (proto->Quality <= ITEM_QUALITY_NORMAL || proto->Quality > qualityLimit)
+                        continue;
+
+                    if (!IsItemLevelWithinTargetBand(proto->ItemLevel, targetAverageIlvl, config))
+                        continue;
+
+                    if (proto->RequiredLevel > bot->GetLevel() || proto->Duration != 0 || proto->Bonding == BIND_QUEST_ITEM)
+                        continue;
+
+                    if (slot == EQUIPMENT_SLOT_OFFHAND && bot->getClass() == CLASS_ROGUE &&
+                        proto->Class != ITEM_CLASS_WEAPON)
+                        continue;
+
+                    if (IsPrimaryArmorSlot(slot))
+                    {
+                        if (proto->Class != ITEM_CLASS_ARMOR || !IsTierArmorSubClass(proto->SubClass) ||
+                            proto->SubClass != preferredArmorSubClass)
+                        {
+                            continue;
+                        }
+                    }
+
+                    uint16 dest = 0;
+                    if (!CanEquipUnseenItemForModule(bot, slot, dest, itemId))
+                        continue;
+
+                    float const score = calculator.CalculateItem(itemId);
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        bestItemId = itemId;
+                        bestDest = dest;
+                    }
+                }
+            }
+        }
+
+        if (bestItemId == 0)
+            continue;
+
+        if (equipped)
+            bot->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+
+        if (bot->EquipNewItem(bestDest, bestItemId, true))
+            bot->AutoUnequipOffhandIfNeed();
+    }
+
+    EnforcePreferredArmorTier(bot, gearScoreLimit, qualityLimit);
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        if (!IsPrimaryArmorSlot(slot))
+            continue;
+
+        Item* equipped = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!equipped)
+            continue;
+
+        ItemTemplate const* proto = equipped->GetTemplate();
+        if (!proto || IsItemLevelWithinTargetBand(proto->ItemLevel, targetAverageIlvl, config))
+            continue;
+
+        EquipPreferredArmorForSlot(bot, calculator, slot, preferredArmorSubClass, gearScoreLimit, qualityLimit,
+                                   targetAverageIlvl, &config);
     }
 }
 
@@ -1547,7 +1722,7 @@ void CleanupBagGear(Player* bot)
 void RunGearPass(Player* bot, uint32 gearScoreLimit, uint32 qualityLimit)
 {
     PlayerbotFactory factory(bot, bot->GetLevel(), qualityLimit, gearScoreLimit);
-    factory.InitEquipment(false, true);
+    factory.InitEquipment(false, false);
     EnforcePreferredArmorTier(bot, gearScoreLimit, qualityLimit);
     factory.InitAmmo();
 
@@ -1556,6 +1731,12 @@ void RunGearPass(Player* bot, uint32 gearScoreLimit, uint32 qualityLimit)
 
     CleanupBagGear(bot);
     bot->DurabilityRepairAll(false, 1.0f, false);
+}
+
+void RunGearPass(Player* bot, uint32 gearScoreLimit, uint32 qualityLimit, float targetAverageIlvl, ModuleConfig const& config)
+{
+    RunGearPass(bot, gearScoreLimit, qualityLimit);
+    EnforceTargetItemLevelBand(bot, gearScoreLimit, qualityLimit, targetAverageIlvl, config);
 }
 
 /* Build a readable target-ilvl label from mode/ratio policy.
@@ -2082,6 +2263,53 @@ void ApplyGearSelf(Player* player)
     }
 }
 
+uint32 GetSpecPlayerTargetAverageIlvl(uint8 targetLevel)
+{
+    switch (targetLevel)
+    {
+        case 60:
+            return 62;
+        case 70:
+            return 105;
+        default:
+            return targetLevel;
+    }
+}
+
+void ApplySpecPlayerGear(Player* player, uint8 targetLevel, ModuleConfig const& config)
+{
+    float const targetAverageIlvl = static_cast<float>(GetSpecPlayerTargetAverageIlvl(targetLevel));
+    uint32 const targetIlvl = static_cast<uint32>(targetAverageIlvl);
+    uint32 gearScoreLimit = ComputeGearScoreLimitFromAverageIlvl(targetAverageIlvl);
+
+    for (uint8 attempt = 0; attempt < 6; ++attempt)
+    {
+        DestroyOldGear(player);
+
+        /* Specplayer should stay in green/blue/purple bands and also correct
+         * individual outlier slots toward the requested average ilvl.
+         */
+        RunGearPass(player, gearScoreLimit, ITEM_QUALITY_EPIC, targetAverageIlvl, config);
+
+        uint32 const currentIlvl = static_cast<uint32>(player->GetAverageItemLevelForDF());
+        if (currentIlvl == 0 || IsGearWithinTargetBand(player, targetAverageIlvl, config))
+            break;
+
+        float const scaled = static_cast<float>(gearScoreLimit) * static_cast<float>(targetIlvl) / static_cast<float>(currentIlvl);
+        uint32 nextLimit = static_cast<uint32>(scaled);
+
+        if (nextLimit == gearScoreLimit)
+        {
+            if (currentIlvl > targetIlvl && nextLimit > 1)
+                --nextLimit;
+            else if (currentIlvl < targetIlvl)
+                ++nextLimit;
+        }
+
+        gearScoreLimit = std::max<uint32>(1, nextLimit);
+    }
+}
+
 /* Parse incoming chat, honor command prefix/separator, and execute gearself once
  * for each explicit appearance in the message.
  */
@@ -2294,7 +2522,7 @@ bool ApplySpecPlayerSetup(Player* target, std::string const& requestedProfile, u
     NormalizeKnownSkillsToLevelCap(target);
     RemoveLevel60EpicClassMountSpellsForSpecPlayer(target);
     NormalizeRidingSkillForLevel(target);
-    ApplyGearSelf(target);
+    ApplySpecPlayerGear(target, targetLevel, config);
 
     if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(target))
         ResetBotAIAndActions(botAI);
@@ -2360,7 +2588,7 @@ public:
     {
         static Acore::ChatCommands::ChatCommandTable commandTable =
         {
-            { "specplayer", HandleSpecPlayerCommand, SEC_GAMEMASTER, Acore::ChatCommands::Console::No }
+            { "specplayer", HandleSpecPlayerCommand, SEC_GAMEMASTER, Acore::ChatCommands::Console::Yes }
         };
 
         return commandTable;
@@ -2371,11 +2599,13 @@ public:
                                         Optional<std::string> skill1Arg,
                                         Optional<std::string> skill2Arg)
     {
-        if (!handler || !handler->GetSession())
+        if (!handler)
             return false;
 
-        uint8 const accountLevel = static_cast<uint8>(handler->GetSession()->GetSecurity());
-        if (accountLevel < 2)
+        uint8 const accountLevel = handler->IsConsole()
+            ? uint8(SEC_CONSOLE)
+            : static_cast<uint8>(handler->GetSession()->GetSecurity());
+        if (!handler->IsConsole() && accountLevel < 2)
         {
             handler->PSendSysMessage("specplayer: account level 2 required (current {}).", uint32(accountLevel));
             return false;
