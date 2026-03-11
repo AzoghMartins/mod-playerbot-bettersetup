@@ -284,6 +284,48 @@ uint16 GetSkillStepForValue(uint16 value)
     return 6;
 }
 
+void NormalizeRidingSkillForLevel(Player* target)
+{
+    if (!target)
+        return;
+
+    if (target->GetLevel() < 40)
+    {
+        if (target->HasSkill(SKILL_RIDING))
+            target->SetSkill(SKILL_RIDING, 0, 0, 0);
+
+        return;
+    }
+
+    uint16 desiredValue = 75;
+
+    if (target->GetLevel() >= 70)
+        desiredValue = 225;
+
+    uint16 const step = GetSkillStepForValue(desiredValue);
+
+    target->SetSkill(SKILL_RIDING, step, desiredValue, desiredValue);
+}
+
+void RemoveLevel60EpicClassMountSpellsForSpecPlayer(Player* target)
+{
+    if (!target || target->GetLevel() != 60)
+        return;
+
+    switch (target->getClass())
+    {
+        case CLASS_PALADIN:
+            target->removeSpell(23214, SPEC_MASK_ALL, false);
+            target->removeSpell(34767, SPEC_MASK_ALL, false);
+            break;
+        case CLASS_WARLOCK:
+            target->removeSpell(23161, SPEC_MASK_ALL, false);
+            break;
+        default:
+            break;
+    }
+}
+
 bool ParseRequestedProfessions(Optional<std::string> skill1Arg,
                                Optional<std::string> skill2Arg,
                                ProfessionPair& professions, std::string& errorMessage)
@@ -1829,6 +1871,7 @@ bool ProcessSpecForBot(Player* commandSender, uint32 chatType, std::string const
             ApplyAutoGear(bot, commandSender, config);
 
         LearnSpellsForCurrentLevel(bot);
+        NormalizeRidingSkillForLevel(bot);
         ResetBotAIAndActions(botAI);
 
         result.updated++;
@@ -2249,6 +2292,8 @@ bool ApplySpecPlayerSetup(Player* target, std::string const& requestedProfile, u
     LearnSpellsForCurrentLevel(target);
     ApplyRequestedPrimaryProfessions(target, professions);
     NormalizeKnownSkillsToLevelCap(target);
+    RemoveLevel60EpicClassMountSpellsForSpecPlayer(target);
+    NormalizeRidingSkillForLevel(target);
     ApplyGearSelf(target);
 
     if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(target))

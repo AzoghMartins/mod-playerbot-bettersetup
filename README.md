@@ -67,7 +67,9 @@ Examples:
 - If the target is offline, the request is queued and applied automatically at that character's next login.
 - Optional `skill1` + `skill2` override primary professions (must provide both).
 - Applies level, talents/spec, post-spec maintenance, spell refresh, and `gearself`-style gear pass.
-- Sets all known non-language skills to `level * 5` after setup.
+- Sets all known non-language skills to `level * 5` after setup, except Riding:
+  level `< 40` clears Riding, `40-69` sets it to `75`, and `70+` sets it to `225`.
+- For `.specplayer` at level `60`, Paladins and Warlocks temporarily learn quest-locked class spells during the spell refresh, then have their epic class mount spell removed so Riding can remain at `75` and the quest chain is still available later.
 
 ## Expansion Source Logic
 
