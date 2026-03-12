@@ -8,7 +8,12 @@
 # mod-playerbot-bettersetup module
 ########################################
 #
-# Unified spec command for mod-playerbots.
+# Unified spec and specplayer workflows for mod-playerbots.
+#
+
+########################################
+# General Spec Command
+########################################
 #
 #    PlayerbotBetterSetup.Spec.Enable
 #        Description: Enables the unified spec command handling.
@@ -16,7 +21,8 @@
 #                     1 - Enabled
 #
 #    PlayerbotBetterSetup.Spec.RequireMasterControl
-#        Description: If enabled, command sender must be the bot master (except GMs).
+#        Description: If enabled, command sender must be the bot master
+#                     (except GMs).
 #        Default:     0 - Disabled
 #                     1 - Enabled
 #
@@ -25,25 +31,38 @@
 #        Default:     0 - Disabled
 #                     1 - Enabled
 #
+
+PlayerbotBetterSetup.Spec.Enable = 1
+PlayerbotBetterSetup.Spec.RequireMasterControl = 1
+PlayerbotBetterSetup.Spec.ShowSpecListOnEmpty = 1
+
+########################################
+# Spec Autogear Policy
+########################################
+#
 #    PlayerbotBetterSetup.Spec.AutoGearRndBots
 #        Description: Auto-gear rnd/addclass bots after 'spec'.
-#                     'gear' argument is NOT required for rnd/addclass bots.
+#                     'gear' argument is not required for rnd/addclass bots.
 #        Default:     0 - Disabled
 #                     1 - Enabled
 #
 #    PlayerbotBetterSetup.Spec.AutoGearAltBots
-#        Description: Allows altbot autogear, but only when command includes 'gear'.
+#        Description: Allows altbot autogear, but only when command includes
+#                     'gear'.
 #        Default:     0 - Disabled
 #                     1 - Enabled
 #
 #    PlayerbotBetterSetup.Spec.ExpansionSource
-#        Description: Expansion source used for talent/glyph limits when
+#        Description: Expansion source used for talent and glyph limits when
 #                     AiPlayerbot.LimitTalentsExpansion = 1.
 #        Allowed:     level, progression, auto
 #                     level       -> use level thresholds
 #                     progression -> use character_settings row for source
-#                                    'mod-individual-progression'
-#                     auto        -> progression if present, else level
+#                                    'mod-individual-progression', but never
+#                                    below the target's own level bracket
+#                     auto        -> progression if present, else level;
+#                                    progression can widen the cap, but level
+#                                    remains the minimum floor
 #        Default:     auto
 #
 #    PlayerbotBetterSetup.Spec.GearModeRndBots
@@ -56,57 +75,203 @@
 #    PlayerbotBetterSetup.Spec.GearMasterIlvlRatioAltBots
 #        Description: Ratio applied to commanding player's average item level
 #                     when GearMode* = master_ilvl_ratio.
-#                     If master ilvl context is invalid, falls back to top_for_level.
+#                     If master ilvl context is invalid, falls back to
+#                     top_for_level.
 #        Default:     1.0
 #
 #    PlayerbotBetterSetup.Spec.GearValidationLowerRatio
 #    PlayerbotBetterSetup.Spec.GearValidationUpperRatio
-#        Description: Accepted range for equipped item levels around target ilvl.
-#                     itemLevel must be within [target*lower, target*upper].
+#        Description: Accepted range for equipped item levels around target
+#                     ilvl. itemLevel must be within [target*lower, target*upper].
 #        Default:     0.85 / 1.15
 #
 #    PlayerbotBetterSetup.Spec.GearRetryCount
-#        Description: Number of full regear attempts in ratio mode before settling.
+#        Description: Number of full regear attempts in ratio mode before
+#                     settling.
 #        Default:     4
 #
 #    PlayerbotBetterSetup.Spec.GearQualityCapRatioMode
 #    PlayerbotBetterSetup.Spec.GearQualityCapTopForLevel
-#        Description: Item quality ceiling used by gearing passes.
-#                     1 = normal, 2 = uncommon, 3 = rare, 4 = epic, 5 = legendary
+#        Description: Item quality ceiling used by spec autogear passes.
+#                     1 = normal, 2 = uncommon, 3 = rare, 4 = epic,
+#                     5 = legendary
 #        Default:     4 / 5
 #
+
+PlayerbotBetterSetup.Spec.AutoGearRndBots = 1
+PlayerbotBetterSetup.Spec.AutoGearAltBots = 0
+PlayerbotBetterSetup.Spec.ExpansionSource = auto
+PlayerbotBetterSetup.Spec.GearModeRndBots = master_ilvl_ratio
+PlayerbotBetterSetup.Spec.GearModeAltBots = master_ilvl_ratio
+PlayerbotBetterSetup.Spec.GearMasterIlvlRatioRndBots = 1.0
+PlayerbotBetterSetup.Spec.GearMasterIlvlRatioAltBots = 1.0
+PlayerbotBetterSetup.Spec.GearValidationLowerRatio = 0.85
+PlayerbotBetterSetup.Spec.GearValidationUpperRatio = 1.15
+PlayerbotBetterSetup.Spec.GearRetryCount = 4
+PlayerbotBetterSetup.Spec.GearQualityCapRatioMode = 4
+PlayerbotBetterSetup.Spec.GearQualityCapTopForLevel = 5
+
+########################################
+# SpecPlayer Access
+########################################
+#
+#    PlayerbotBetterSetup.SpecPlayer.MinSecurityLevel
+#        Description: Minimum account level required to use `.specplayer`.
+#                     Console always bypasses this check.
+#        Default:     2
+#                     0 = player, 1 = moderator, 2 = gamemaster,
+#                     3 = administrator
+#
+#    PlayerbotBetterSetup.SpecPlayer.AllowOfflineQueue
+#        Description: Allows `.specplayer` to queue requests for offline
+#                     characters and apply them on next login.
+#        Default:     0 - Disabled
+#                     1 - Enabled
+#
+
+PlayerbotBetterSetup.SpecPlayer.MinSecurityLevel = 2
+PlayerbotBetterSetup.SpecPlayer.AllowOfflineQueue = 1
+
+########################################
+# SpecPlayer Workflow
+########################################
+#
+#    PlayerbotBetterSetup.SpecPlayer.ApplyPrimaryProfessions
+#        Description: If enabled, `.specplayer` applies the requested
+#                     profession pair when skill1 and skill2 are provided.
+#        Default:     0 - Disabled
+#                     1 - Enabled
+#
+#    PlayerbotBetterSetup.SpecPlayer.NormalizeKnownSkills
+#        Description: If enabled, `.specplayer` sets known non-language skills
+#                     to level * 5 after setup.
+#        Default:     0 - Disabled
+#                     1 - Enabled
+#
+#    PlayerbotBetterSetup.SpecPlayer.RemoveLevel60EpicClassMountSpells
+#        Description: If enabled, level-60 Paladins and Warlocks have the
+#                     temporary epic class mount spell removed after spell
+#                     refresh so the quest chain remains available.
+#        Default:     0 - Disabled
+#                     1 - Enabled
+#
+#    PlayerbotBetterSetup.SpecPlayer.PostGlyphs
+#    PlayerbotBetterSetup.SpecPlayer.PostConsumables
+#    PlayerbotBetterSetup.SpecPlayer.PostPet
+#    PlayerbotBetterSetup.SpecPlayer.PostPetTalents
+#        Description: Toggle individual post-spec maintenance steps used by
+#                     `.specplayer`.
+#                     PostPetTalents only runs when Wrath pet talents are valid.
+#        Default:     0 - Disabled
+#                     1 - Enabled
+#
+
+PlayerbotBetterSetup.SpecPlayer.ApplyPrimaryProfessions = 1
+PlayerbotBetterSetup.SpecPlayer.NormalizeKnownSkills = 1
+PlayerbotBetterSetup.SpecPlayer.RemoveLevel60EpicClassMountSpells = 1
+PlayerbotBetterSetup.SpecPlayer.PostGlyphs = 1
+PlayerbotBetterSetup.SpecPlayer.PostConsumables = 1
+PlayerbotBetterSetup.SpecPlayer.PostPet = 1
+PlayerbotBetterSetup.SpecPlayer.PostPetTalents = 1
+
+########################################
+# SpecPlayer Riding
+########################################
+#
+#    PlayerbotBetterSetup.SpecPlayer.NormalizeRiding
+#        Description: If enabled, `.specplayer` normalizes Riding after setup.
+#                     Below RidingBasicLevel, Riding is cleared.
+#                     Between RidingBasicLevel and RidingAdvancedLevel - 1,
+#                     RidingBasicSkill is applied.
+#                     At or above RidingAdvancedLevel, RidingAdvancedSkill is
+#                     applied.
+#        Default:     0 - Disabled
+#                     1 - Enabled
+#
+#    PlayerbotBetterSetup.SpecPlayer.RidingBasicLevel
+#    PlayerbotBetterSetup.SpecPlayer.RidingAdvancedLevel
+#        Description: Level thresholds used by specplayer riding normalization.
+#        Default:     40 / 70
+#
+#    PlayerbotBetterSetup.SpecPlayer.RidingBasicSkill
+#    PlayerbotBetterSetup.SpecPlayer.RidingAdvancedSkill
+#        Description: Riding skill values applied by specplayer riding
+#                     normalization.
+#        Default:     75 / 225
+#
+
+PlayerbotBetterSetup.SpecPlayer.NormalizeRiding = 1
+PlayerbotBetterSetup.SpecPlayer.RidingBasicLevel = 40
+PlayerbotBetterSetup.SpecPlayer.RidingBasicSkill = 75
+PlayerbotBetterSetup.SpecPlayer.RidingAdvancedLevel = 70
+PlayerbotBetterSetup.SpecPlayer.RidingAdvancedSkill = 225
+
+########################################
+# SpecPlayer Gearing
+########################################
+#
+#    PlayerbotBetterSetup.SpecPlayer.TargetAverageIlvl60
+#    PlayerbotBetterSetup.SpecPlayer.TargetAverageIlvl70
+#        Description: Target average ilvl used by `.specplayer` at level 60
+#                     and level 70. Other levels fall back to target ilvl =
+#                     character level.
+#        Default:     62 / 105
+#
+#    PlayerbotBetterSetup.SpecPlayer.GearRetryCount
+#        Description: Number of full `.specplayer` regear attempts before
+#                     settling.
+#        Default:     6
+#
+#    PlayerbotBetterSetup.SpecPlayer.GearQualityCap
+#        Description: Item quality ceiling used by `.specplayer` gear passes.
+#                     1 = normal, 2 = uncommon, 3 = rare, 4 = epic,
+#                     5 = legendary
+#        Default:     4
+#
+#    PlayerbotBetterSetup.SpecPlayer.ExcludeQuestRewardItems
+#        Description: If enabled, `.specplayer` refuses gear that appears in
+#                     quest reward tables.
+#        Default:     0 - Disabled
+#                     1 - Enabled
+#
+#    PlayerbotBetterSetup.SpecPlayer.EnforceUniqueRingTrinketPairs
+#        Description: If enabled, `.specplayer` prevents duplicate ring and
+#                     trinket pairs when the item is unique, unique-equipped,
+#                     or limited by the same item limit category.
+#        Default:     0 - Disabled
+#                     1 - Enabled
+#
+#    PlayerbotBetterSetup.SpecPlayer.GearLevelSearchWindow
+#        Description: Search window, in required levels, used when `.specplayer`
+#                     looks for replacement gear near the target band.
+#                     0 means current level only.
+#        Default:     10
+#
+
+PlayerbotBetterSetup.SpecPlayer.TargetAverageIlvl60 = 62
+PlayerbotBetterSetup.SpecPlayer.TargetAverageIlvl70 = 105
+PlayerbotBetterSetup.SpecPlayer.GearRetryCount = 6
+PlayerbotBetterSetup.SpecPlayer.GearQualityCap = 4
+PlayerbotBetterSetup.SpecPlayer.ExcludeQuestRewardItems = 1
+PlayerbotBetterSetup.SpecPlayer.EnforceUniqueRingTrinketPairs = 1
+PlayerbotBetterSetup.SpecPlayer.GearLevelSearchWindow = 10
+
+########################################
+# Diagnostics And Tools
+########################################
+#
 #    PlayerbotBetterSetup.LoginDiagnostics.Enable
-#        Description: Show module status/target-ilvl diagnostics in chat on login.
+#        Description: Show module status and target-ilvl diagnostics in chat on
+#                     login.
 #        Default:     0 - Disabled
 #                     1 - Enabled
 #
 #    PlayerbotBetterSetup.GearSelf.MinSecurityLevel
 #        Description: Minimum account level required to use `gearself`.
-#                     0 = player, 1 = moderator, 2 = gamemaster, 3 = administrator
 #        Default:     2
+#                     0 = player, 1 = moderator, 2 = gamemaster,
+#                     3 = administrator
 #
-
-PlayerbotBetterSetup.Spec.Enable = 1
-PlayerbotBetterSetup.Spec.RequireMasterControl = 1
-PlayerbotBetterSetup.Spec.ShowSpecListOnEmpty = 1
-
-PlayerbotBetterSetup.Spec.AutoGearRndBots = 1
-PlayerbotBetterSetup.Spec.AutoGearAltBots = 0
-
-PlayerbotBetterSetup.Spec.ExpansionSource = auto
-
-PlayerbotBetterSetup.Spec.GearModeRndBots = master_ilvl_ratio
-PlayerbotBetterSetup.Spec.GearModeAltBots = master_ilvl_ratio
-
-PlayerbotBetterSetup.Spec.GearMasterIlvlRatioRndBots = 1.0
-PlayerbotBetterSetup.Spec.GearMasterIlvlRatioAltBots = 1.0
-
-PlayerbotBetterSetup.Spec.GearValidationLowerRatio = 0.85
-PlayerbotBetterSetup.Spec.GearValidationUpperRatio = 1.15
-PlayerbotBetterSetup.Spec.GearRetryCount = 4
-
-PlayerbotBetterSetup.Spec.GearQualityCapRatioMode = 4
-PlayerbotBetterSetup.Spec.GearQualityCapTopForLevel = 5
 
 PlayerbotBetterSetup.LoginDiagnostics.Enable = 1
 PlayerbotBetterSetup.GearSelf.MinSecurityLevel = 2

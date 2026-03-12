@@ -36,6 +36,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace
@@ -63,6 +64,29 @@ constexpr char const* CONF_GEAR_VALIDATION_UPPER_RATIO = "PlayerbotBetterSetup.S
 constexpr char const* CONF_GEAR_RETRY_COUNT = "PlayerbotBetterSetup.Spec.GearRetryCount";
 constexpr char const* CONF_GEAR_QUALITY_CAP_RATIO_MODE = "PlayerbotBetterSetup.Spec.GearQualityCapRatioMode";
 constexpr char const* CONF_GEAR_QUALITY_CAP_TOP_FOR_LEVEL = "PlayerbotBetterSetup.Spec.GearQualityCapTopForLevel";
+constexpr char const* CONF_SPECPLAYER_MIN_SECURITY = "PlayerbotBetterSetup.SpecPlayer.MinSecurityLevel";
+constexpr char const* CONF_SPECPLAYER_ALLOW_OFFLINE_QUEUE = "PlayerbotBetterSetup.SpecPlayer.AllowOfflineQueue";
+constexpr char const* CONF_SPECPLAYER_APPLY_PRIMARY_PROFESSIONS = "PlayerbotBetterSetup.SpecPlayer.ApplyPrimaryProfessions";
+constexpr char const* CONF_SPECPLAYER_NORMALIZE_KNOWN_SKILLS = "PlayerbotBetterSetup.SpecPlayer.NormalizeKnownSkills";
+constexpr char const* CONF_SPECPLAYER_NORMALIZE_RIDING = "PlayerbotBetterSetup.SpecPlayer.NormalizeRiding";
+constexpr char const* CONF_SPECPLAYER_RIDING_BASIC_LEVEL = "PlayerbotBetterSetup.SpecPlayer.RidingBasicLevel";
+constexpr char const* CONF_SPECPLAYER_RIDING_BASIC_SKILL = "PlayerbotBetterSetup.SpecPlayer.RidingBasicSkill";
+constexpr char const* CONF_SPECPLAYER_RIDING_ADVANCED_LEVEL = "PlayerbotBetterSetup.SpecPlayer.RidingAdvancedLevel";
+constexpr char const* CONF_SPECPLAYER_RIDING_ADVANCED_SKILL = "PlayerbotBetterSetup.SpecPlayer.RidingAdvancedSkill";
+constexpr char const* CONF_SPECPLAYER_REMOVE_LEVEL60_EPIC_CLASS_MOUNT_SPELLS =
+    "PlayerbotBetterSetup.SpecPlayer.RemoveLevel60EpicClassMountSpells";
+constexpr char const* CONF_SPECPLAYER_POST_GLYPHS = "PlayerbotBetterSetup.SpecPlayer.PostGlyphs";
+constexpr char const* CONF_SPECPLAYER_POST_CONSUMABLES = "PlayerbotBetterSetup.SpecPlayer.PostConsumables";
+constexpr char const* CONF_SPECPLAYER_POST_PET = "PlayerbotBetterSetup.SpecPlayer.PostPet";
+constexpr char const* CONF_SPECPLAYER_POST_PET_TALENTS = "PlayerbotBetterSetup.SpecPlayer.PostPetTalents";
+constexpr char const* CONF_SPECPLAYER_TARGET_AVERAGE_ILVL_60 = "PlayerbotBetterSetup.SpecPlayer.TargetAverageIlvl60";
+constexpr char const* CONF_SPECPLAYER_TARGET_AVERAGE_ILVL_70 = "PlayerbotBetterSetup.SpecPlayer.TargetAverageIlvl70";
+constexpr char const* CONF_SPECPLAYER_GEAR_RETRY_COUNT = "PlayerbotBetterSetup.SpecPlayer.GearRetryCount";
+constexpr char const* CONF_SPECPLAYER_GEAR_QUALITY_CAP = "PlayerbotBetterSetup.SpecPlayer.GearQualityCap";
+constexpr char const* CONF_SPECPLAYER_EXCLUDE_QUEST_REWARD_ITEMS = "PlayerbotBetterSetup.SpecPlayer.ExcludeQuestRewardItems";
+constexpr char const* CONF_SPECPLAYER_ENFORCE_UNIQUE_RING_TRINKET_PAIRS =
+    "PlayerbotBetterSetup.SpecPlayer.EnforceUniqueRingTrinketPairs";
+constexpr char const* CONF_SPECPLAYER_GEAR_LEVEL_SEARCH_WINDOW = "PlayerbotBetterSetup.SpecPlayer.GearLevelSearchWindow";
 constexpr char const* CONF_LOGIN_DIAGNOSTICS_ENABLE = "PlayerbotBetterSetup.LoginDiagnostics.Enable";
 constexpr char const* CONF_GEARSELF_MIN_SECURITY = "PlayerbotBetterSetup.GearSelf.MinSecurityLevel";
 constexpr char const* OFFLINE_SPECPLAYER_SOURCE = "mod-playerbot-bettersetup-specplayer";
@@ -367,6 +391,15 @@ bool ParseRequestedProfessions(Optional<std::string> skill1Arg,
     return true;
 }
 
+bool ParseRequestedProfessions(std::string const& skill1Arg, std::string const& skill2Arg,
+                               ProfessionPair& professions, std::string& errorMessage)
+{
+    return ParseRequestedProfessions(Optional<std::string>(skill1Arg), Optional<std::string>(skill2Arg), professions, errorMessage);
+}
+
+void ApplyRequestedPrimaryProfessions(Player* target, ProfessionPair professions);
+void NormalizeKnownSkillsToLevelCap(Player* target);
+
 struct ModuleConfig
 {
     bool enabled = true;
@@ -389,6 +422,28 @@ struct ModuleConfig
     uint8 gearRetryCount = 4;
     uint8 gearQualityCapRatioMode = ITEM_QUALITY_EPIC;
     uint8 gearQualityCapTopForLevel = ITEM_QUALITY_LEGENDARY;
+
+    uint8 specPlayerMinSecurity = SEC_GAMEMASTER;
+    bool specPlayerAllowOfflineQueue = true;
+    bool specPlayerApplyPrimaryProfessions = true;
+    bool specPlayerNormalizeKnownSkills = true;
+    bool specPlayerNormalizeRiding = true;
+    uint8 specPlayerRidingBasicLevel = 40;
+    uint16 specPlayerRidingBasicSkill = 75;
+    uint8 specPlayerRidingAdvancedLevel = 70;
+    uint16 specPlayerRidingAdvancedSkill = 225;
+    bool specPlayerRemoveLevel60EpicClassMountSpells = true;
+    bool specPlayerPostGlyphs = true;
+    bool specPlayerPostConsumables = true;
+    bool specPlayerPostPet = true;
+    bool specPlayerPostPetTalents = true;
+    uint32 specPlayerTargetAverageIlvl60 = 62;
+    uint32 specPlayerTargetAverageIlvl70 = 105;
+    uint8 specPlayerGearRetryCount = 6;
+    uint8 specPlayerGearQualityCap = ITEM_QUALITY_EPIC;
+    bool specPlayerExcludeQuestRewardItems = true;
+    bool specPlayerEnforceUniqueRingTrinketPairs = true;
+    uint8 specPlayerGearLevelSearchWindow = 10;
 };
 
 /* Read module knobs from config and clamp dangerous values before they can
@@ -423,6 +478,32 @@ ModuleConfig LoadModuleConfig()
     config.gearRetryCount = static_cast<uint8>(sConfigMgr->GetOption<uint32>(CONF_GEAR_RETRY_COUNT, 4));
     config.gearQualityCapRatioMode = static_cast<uint8>(sConfigMgr->GetOption<uint32>(CONF_GEAR_QUALITY_CAP_RATIO_MODE, ITEM_QUALITY_EPIC));
     config.gearQualityCapTopForLevel = static_cast<uint8>(sConfigMgr->GetOption<uint32>(CONF_GEAR_QUALITY_CAP_TOP_FOR_LEVEL, ITEM_QUALITY_LEGENDARY));
+    config.specPlayerMinSecurity = static_cast<uint8>(sConfigMgr->GetOption<uint32>(CONF_SPECPLAYER_MIN_SECURITY, SEC_GAMEMASTER));
+    config.specPlayerAllowOfflineQueue = sConfigMgr->GetOption<bool>(CONF_SPECPLAYER_ALLOW_OFFLINE_QUEUE, true);
+    config.specPlayerApplyPrimaryProfessions = sConfigMgr->GetOption<bool>(CONF_SPECPLAYER_APPLY_PRIMARY_PROFESSIONS, true);
+    config.specPlayerNormalizeKnownSkills = sConfigMgr->GetOption<bool>(CONF_SPECPLAYER_NORMALIZE_KNOWN_SKILLS, true);
+    config.specPlayerNormalizeRiding = sConfigMgr->GetOption<bool>(CONF_SPECPLAYER_NORMALIZE_RIDING, true);
+    config.specPlayerRidingBasicLevel = static_cast<uint8>(sConfigMgr->GetOption<uint32>(CONF_SPECPLAYER_RIDING_BASIC_LEVEL, 40));
+    config.specPlayerRidingBasicSkill = static_cast<uint16>(sConfigMgr->GetOption<uint32>(CONF_SPECPLAYER_RIDING_BASIC_SKILL, 75));
+    config.specPlayerRidingAdvancedLevel = static_cast<uint8>(sConfigMgr->GetOption<uint32>(CONF_SPECPLAYER_RIDING_ADVANCED_LEVEL, 70));
+    config.specPlayerRidingAdvancedSkill = static_cast<uint16>(sConfigMgr->GetOption<uint32>(CONF_SPECPLAYER_RIDING_ADVANCED_SKILL, 225));
+    config.specPlayerRemoveLevel60EpicClassMountSpells =
+        sConfigMgr->GetOption<bool>(CONF_SPECPLAYER_REMOVE_LEVEL60_EPIC_CLASS_MOUNT_SPELLS, true);
+    config.specPlayerPostGlyphs = sConfigMgr->GetOption<bool>(CONF_SPECPLAYER_POST_GLYPHS, true);
+    config.specPlayerPostConsumables = sConfigMgr->GetOption<bool>(CONF_SPECPLAYER_POST_CONSUMABLES, true);
+    config.specPlayerPostPet = sConfigMgr->GetOption<bool>(CONF_SPECPLAYER_POST_PET, true);
+    config.specPlayerPostPetTalents = sConfigMgr->GetOption<bool>(CONF_SPECPLAYER_POST_PET_TALENTS, true);
+    config.specPlayerTargetAverageIlvl60 =
+        sConfigMgr->GetOption<uint32>(CONF_SPECPLAYER_TARGET_AVERAGE_ILVL_60, 62);
+    config.specPlayerTargetAverageIlvl70 =
+        sConfigMgr->GetOption<uint32>(CONF_SPECPLAYER_TARGET_AVERAGE_ILVL_70, 105);
+    config.specPlayerGearRetryCount = static_cast<uint8>(sConfigMgr->GetOption<uint32>(CONF_SPECPLAYER_GEAR_RETRY_COUNT, 6));
+    config.specPlayerGearQualityCap = static_cast<uint8>(sConfigMgr->GetOption<uint32>(CONF_SPECPLAYER_GEAR_QUALITY_CAP, ITEM_QUALITY_EPIC));
+    config.specPlayerExcludeQuestRewardItems = sConfigMgr->GetOption<bool>(CONF_SPECPLAYER_EXCLUDE_QUEST_REWARD_ITEMS, true);
+    config.specPlayerEnforceUniqueRingTrinketPairs =
+        sConfigMgr->GetOption<bool>(CONF_SPECPLAYER_ENFORCE_UNIQUE_RING_TRINKET_PAIRS, true);
+    config.specPlayerGearLevelSearchWindow =
+        static_cast<uint8>(sConfigMgr->GetOption<uint32>(CONF_SPECPLAYER_GEAR_LEVEL_SEARCH_WINDOW, 10));
 
     /* Clamp ratios; negative item level multipliers are fun in theory and cursed in practice. */
 
@@ -444,8 +525,42 @@ ModuleConfig LoadModuleConfig()
     config.gearQualityCapRatioMode = std::clamp<uint8>(config.gearQualityCapRatioMode, ITEM_QUALITY_NORMAL, ITEM_QUALITY_LEGENDARY);
     config.gearQualityCapTopForLevel = std::clamp<uint8>(config.gearQualityCapTopForLevel, ITEM_QUALITY_NORMAL, ITEM_QUALITY_LEGENDARY);
     config.gearSelfMinSecurity = std::clamp<uint8>(config.gearSelfMinSecurity, SEC_PLAYER, SEC_ADMINISTRATOR);
+    config.specPlayerMinSecurity = std::clamp<uint8>(config.specPlayerMinSecurity, SEC_PLAYER, SEC_ADMINISTRATOR);
+    config.specPlayerRidingBasicLevel = std::clamp<uint8>(config.specPlayerRidingBasicLevel, 1, std::numeric_limits<uint8>::max());
+    config.specPlayerRidingAdvancedLevel = std::clamp<uint8>(config.specPlayerRidingAdvancedLevel, config.specPlayerRidingBasicLevel,
+                                                             std::numeric_limits<uint8>::max());
+    config.specPlayerRidingBasicSkill = std::clamp<uint16>(config.specPlayerRidingBasicSkill, 1, std::numeric_limits<uint16>::max());
+    config.specPlayerRidingAdvancedSkill =
+        std::clamp<uint16>(config.specPlayerRidingAdvancedSkill, config.specPlayerRidingBasicSkill, std::numeric_limits<uint16>::max());
+    config.specPlayerTargetAverageIlvl60 = std::clamp<uint32>(config.specPlayerTargetAverageIlvl60, 1u, 1000u);
+    config.specPlayerTargetAverageIlvl70 = std::clamp<uint32>(config.specPlayerTargetAverageIlvl70, 1u, 1000u);
+    config.specPlayerGearRetryCount = std::clamp<uint8>(config.specPlayerGearRetryCount, 1, 20);
+    config.specPlayerGearQualityCap = std::clamp<uint8>(config.specPlayerGearQualityCap, ITEM_QUALITY_NORMAL, ITEM_QUALITY_LEGENDARY);
+    config.specPlayerGearLevelSearchWindow = std::clamp<uint8>(config.specPlayerGearLevelSearchWindow, 0, 30);
 
     return config;
+}
+
+void NormalizeSpecPlayerRidingForLevel(Player* target, ModuleConfig const& config)
+{
+    if (!target || !config.specPlayerNormalizeRiding)
+        return;
+
+    if (target->GetLevel() < config.specPlayerRidingBasicLevel)
+    {
+        if (target->HasSkill(SKILL_RIDING))
+            target->SetSkill(SKILL_RIDING, 0, 0, 0);
+
+        return;
+    }
+
+    uint16 desiredValue = config.specPlayerRidingBasicSkill;
+
+    if (target->GetLevel() >= config.specPlayerRidingAdvancedLevel)
+        desiredValue = config.specPlayerRidingAdvancedSkill;
+
+    uint16 const step = GetSkillStepForValue(desiredValue);
+    target->SetSkill(SKILL_RIDING, step, desiredValue, desiredValue);
 }
 
 struct SpecDefinition
@@ -844,9 +959,12 @@ struct ParsedSpecCommand
     bool listOnly = false;
     bool gearRequested = false;
     std::string profile;
+    ProfessionPair professions = { 0, 0 };
+    std::string errorMessage;
 };
 
-/* Parse "spec", "spec <profile>", and "spec <profile> gear".
+/* Parse "spec", "spec <profile>", "spec <profile> gear",
+ * and optional profession pairs near the end of the command.
  * Anything else is politely ignored so raid chat can continue discussing fish feasts.
  */
 
@@ -871,17 +989,65 @@ ParsedSpecCommand ParseSpecCommand(std::string const& command)
         return parsed;
     }
 
-    /* Optional trailing gear flag is consumed last so profile parsing stays simple. */
-
-    if (NormalizeToken(words.back()) == "gear")
+    auto const consumeTrailingGear = [&]()
     {
+        if (words.size() <= 1 || NormalizeToken(words.back()) != "gear")
+            return false;
+
         parsed.gearRequested = true;
         words.pop_back();
+        return true;
+    };
+
+    auto const looksLikeProfession = [](std::string const& token)
+    {
+        uint16 skillId = 0;
+        return ResolveProfessionSkill(token, skillId);
+    };
+
+    consumeTrailingGear();
+
+    if (words.size() >= 4)
+    {
+        ProfessionPair professions = { 0, 0 };
+        std::string professionError;
+
+        if (ParseRequestedProfessions(words[words.size() - 2], words[words.size() - 1], professions, professionError))
+        {
+            parsed.professions = professions;
+            words.pop_back();
+            words.pop_back();
+        }
+        else if (looksLikeProfession(words[words.size() - 2]) || looksLikeProfession(words[words.size() - 1]))
+        {
+            parsed.errorMessage = professionError;
+            return parsed;
+        }
     }
+
+    consumeTrailingGear();
 
     if (words.size() == 1)
     {
+        if (parsed.professions.first != 0 || parsed.professions.second != 0)
+        {
+            parsed.errorMessage = "spec profile required before profession arguments.";
+            return parsed;
+        }
+
         parsed.listOnly = true;
+        return parsed;
+    }
+
+    if (words.size() == 3 && looksLikeProfession(words[1]) && looksLikeProfession(words[2]))
+    {
+        parsed.errorMessage = "spec profile required before profession arguments.";
+        return parsed;
+    }
+
+    if (looksLikeProfession(words.back()))
+    {
+        parsed.errorMessage = "provide both skill1 and skill2, or omit both.";
         return parsed;
     }
 
@@ -984,6 +1150,25 @@ char const* ExpansionCapToString(ExpansionCap cap)
     }
 }
 
+uint8 GetExpansionCapOrder(ExpansionCap cap)
+{
+    switch (cap)
+    {
+        case ExpansionCap::Vanilla:
+            return 0;
+        case ExpansionCap::TBC:
+            return 1;
+        case ExpansionCap::Wrath:
+        default:
+            return 2;
+    }
+}
+
+ExpansionCap GetWiderExpansionCap(ExpansionCap left, ExpansionCap right)
+{
+    return GetExpansionCapOrder(left) >= GetExpansionCapOrder(right) ? left : right;
+}
+
 /* Fallback expansion detector: old reliable level bands. */
 
 ExpansionCap GetLevelBasedCap(Player* bot)
@@ -1045,12 +1230,15 @@ ExpansionCap ResolveExpansionCap(Player* bot, Player* commandSender, ModuleConfi
     if (!sPlayerbotAIConfig.limitTalentsExpansion)
         return ExpansionCap::Wrath;
 
+    ExpansionCap const levelCap = GetLevelBasedCap(bot);
     std::string const mode = config.expansionSource;
 
     if (mode == "level")
-        return GetLevelBasedCap(bot);
+        return levelCap;
 
-    /* Progression/auto tries character_settings first, then falls back to level bands. */
+    /* Progression may widen access for a later expansion realm state, but it should
+     * never narrow a character below the talent rows their current level already supports.
+     */
 
     if (mode == "progression" || mode == "auto")
     {
@@ -1058,15 +1246,15 @@ ExpansionCap ResolveExpansionCap(Player* bot, Player* commandSender, ModuleConfi
         {
             uint8 progressionTier = 0;
             if (TryGetProgressionTierFromSettings(commandSender->GetGUID().GetCounter(), progressionTier))
-                return GetProgressionBasedCap(progressionTier);
+                return GetWiderExpansionCap(levelCap, GetProgressionBasedCap(progressionTier));
         }
 
-        return GetLevelBasedCap(bot);
+        return levelCap;
     }
 
     /* Unknown mode values get the boring fallback so nobody gets paged at 3am. */
 
-    return GetLevelBasedCap(bot);
+    return levelCap;
 }
 
 /* Hard gate for talent nodes when expansion limiting is active.
@@ -1112,6 +1300,33 @@ std::vector<std::vector<uint32>> BuildTemplatePath(Player* bot, uint8 classId, i
     return path;
 }
 
+uint32 GetPrimaryTalentTab(std::vector<std::vector<uint32>> const& parsedPath)
+{
+    std::map<uint32, uint32> pointTotals;
+
+    for (std::vector<uint32> const& entry : parsedPath)
+    {
+        if (entry.size() < 4)
+            continue;
+
+        pointTotals[entry[0]] += entry[3];
+    }
+
+    uint32 primaryTab = 0;
+    uint32 highestPoints = 0;
+
+    for (auto const& [tab, points] : pointTotals)
+    {
+        if (points <= highestPoints)
+            continue;
+
+        primaryTab = tab;
+        highestPoints = points;
+    }
+
+    return primaryTab;
+}
+
 /* Some caps do not support glyphs; when in doubt, wipe to a clean state. */
 
 void ClearGlyphs(Player* bot)
@@ -1120,6 +1335,82 @@ void ClearGlyphs(Player* bot)
         bot->SetGlyph(slotIndex, 0, true);
 
     bot->SendTalentsInfoData(false);
+}
+
+void FillRemainingTalentsInTree(Player* bot, uint32 specTab, ExpansionCap cap)
+{
+    if (!bot || bot->GetFreeTalentPoints() == 0)
+        return;
+
+    uint32 const classMask = bot->getClassMask();
+    std::map<uint32, std::vector<TalentEntry const*>> spellsByRow;
+
+    for (uint32 i = 0; i < sTalentStore.GetNumRows(); ++i)
+    {
+        TalentEntry const* talentInfo = sTalentStore.LookupEntry(i);
+        if (!talentInfo || !IsAllowedTalentNode(cap, talentInfo->Row, talentInfo->Col))
+            continue;
+
+        TalentTabEntry const* talentTabInfo = sTalentTabStore.LookupEntry(talentInfo->TalentTab);
+        if (!talentTabInfo || talentTabInfo->tabpage != specTab)
+            continue;
+
+        if ((classMask & talentTabInfo->ClassMask) == 0)
+            continue;
+
+        spellsByRow[talentInfo->Row].push_back(talentInfo);
+    }
+
+    uint32 freePoints = bot->GetFreeTalentPoints();
+
+    for (auto& rowEntry : spellsByRow)
+    {
+        std::vector<TalentEntry const*>& spells = rowEntry.second;
+        if (spells.empty())
+            continue;
+
+        int attemptCount = 0;
+        while (!spells.empty() && static_cast<int>(freePoints) - static_cast<int>(bot->GetFreeTalentPoints()) < 5 &&
+               attemptCount++ < 3 && bot->GetFreeTalentPoints())
+        {
+            uint32 const index = urand(0, spells.size() - 1);
+            TalentEntry const* talentInfo = spells[index];
+            int maxRank = 0;
+
+            for (int rank = 0; rank < std::min<uint32>(MAX_TALENT_RANK, bot->GetFreeTalentPoints()); ++rank)
+            {
+                if (!talentInfo->RankID[rank])
+                    continue;
+
+                maxRank = rank;
+            }
+
+            if (talentInfo->DependsOn)
+            {
+                bot->LearnTalent(talentInfo->DependsOn,
+                                 std::min(talentInfo->DependsOnRank, bot->GetFreeTalentPoints() - 1));
+            }
+
+            bot->LearnTalent(talentInfo->TalentID, maxRank);
+            spells.erase(spells.begin() + index);
+        }
+
+        freePoints = bot->GetFreeTalentPoints();
+        if (freePoints == 0)
+            break;
+    }
+}
+
+void FillRemainingTalentPoints(Player* bot, std::vector<std::vector<uint32>> const& parsedPath, ExpansionCap cap)
+{
+    if (!bot || parsedPath.empty() || bot->GetFreeTalentPoints() == 0)
+        return;
+
+    uint32 const primaryTab = GetPrimaryTalentTab(parsedPath);
+    FillRemainingTalentsInTree(bot, (primaryTab + 1) % 3, cap);
+
+    if (bot->GetFreeTalentPoints())
+        FillRemainingTalentsInTree(bot, (primaryTab + 2) % 3, cap);
 }
 
 /* Apply talent points from parsed template path, filtered by expansion cap.
@@ -1166,6 +1457,8 @@ bool ApplySpecTalents(Player* bot, int specNo, ExpansionCap cap)
     }
 
     PlayerbotFactory::InitTalentsByParsedSpecLink(bot, filtered, true);
+    FillRemainingTalentPoints(bot, parsedPath, cap);
+    bot->SendTalentsInfoData(false);
     return true;
 }
 
@@ -1302,6 +1595,137 @@ bool IsItemLevelWithinTargetBand(uint32 itemLevel, float targetAverageIlvl, Modu
     float const itemLevelFloat = static_cast<float>(itemLevel);
 
     return itemLevelFloat >= lowerBound && itemLevelFloat <= upperBound;
+}
+
+uint8 GetPairedRingOrTrinketSlot(uint8 slot)
+{
+    switch (slot)
+    {
+        case EQUIPMENT_SLOT_FINGER1:
+            return EQUIPMENT_SLOT_FINGER2;
+        case EQUIPMENT_SLOT_FINGER2:
+            return EQUIPMENT_SLOT_FINGER1;
+        case EQUIPMENT_SLOT_TRINKET1:
+            return EQUIPMENT_SLOT_TRINKET2;
+        case EQUIPMENT_SLOT_TRINKET2:
+            return EQUIPMENT_SLOT_TRINKET1;
+        default:
+            return NULL_SLOT;
+    }
+}
+
+bool IsQuestRewardGearItem(uint32 itemId)
+{
+    if (!itemId)
+        return false;
+
+    static std::unordered_set<uint32> const questRewardItemIds = []()
+    {
+        std::unordered_set<uint32> ids;
+        ObjectMgr::QuestMap const& questTemplates = sObjectMgr->GetQuestTemplates();
+
+        for (ObjectMgr::QuestMap::const_iterator itr = questTemplates.begin(); itr != questTemplates.end(); ++itr)
+        {
+            Quest const* quest = itr->second;
+            if (!quest)
+                continue;
+
+            for (uint32 i = 0; i < quest->GetRewItemsCount(); ++i)
+                if (quest->RewardItemId[i])
+                    ids.insert(quest->RewardItemId[i]);
+
+            for (uint32 i = 0; i < quest->GetRewChoiceItemsCount(); ++i)
+                if (quest->RewardChoiceItemId[i])
+                    ids.insert(quest->RewardChoiceItemId[i]);
+        }
+
+        return ids;
+    }();
+
+    return questRewardItemIds.find(itemId) != questRewardItemIds.end();
+}
+
+bool IsUniqueTwinSlotItem(ItemTemplate const* proto)
+{
+    return proto && (proto->MaxCount == 1 || proto->HasFlag(ITEM_FLAG_UNIQUE_EQUIPPABLE) || proto->ItemLimitCategory != 0);
+}
+
+bool IsValidGearItemForTargetBand(ItemTemplate const* proto, float targetAverageIlvl, ModuleConfig const& config)
+{
+    if (!proto || proto->Quality <= ITEM_QUALITY_NORMAL)
+        return false;
+
+    return IsItemLevelWithinTargetBand(proto->ItemLevel, targetAverageIlvl, config);
+}
+
+bool ViolatesSpecPlayerTwinSlotRule(Player* bot, uint8 slot, ItemTemplate const* proto)
+{
+    if (!bot || !proto)
+        return false;
+
+    uint8 const pairedSlot = GetPairedRingOrTrinketSlot(slot);
+    if (pairedSlot == NULL_SLOT)
+        return false;
+
+    Item* pairedItem = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, pairedSlot);
+    if (!pairedItem)
+        return false;
+
+    ItemTemplate const* pairedProto = pairedItem->GetTemplate();
+    if (!pairedProto)
+        return false;
+
+    if (proto->ItemLimitCategory != 0 && proto->ItemLimitCategory == pairedProto->ItemLimitCategory)
+        return true;
+
+    if (proto->ItemId != pairedProto->ItemId)
+        return false;
+
+    return IsUniqueTwinSlotItem(proto) || IsUniqueTwinSlotItem(pairedProto);
+}
+
+bool IsValidSpecPlayerGearItem(Player* bot, uint8 slot, ItemTemplate const* proto, float targetAverageIlvl, ModuleConfig const& config)
+{
+    if (!IsValidGearItemForTargetBand(proto, targetAverageIlvl, config))
+        return false;
+
+    if (config.specPlayerExcludeQuestRewardItems && IsQuestRewardGearItem(proto->ItemId))
+        return false;
+
+    if (config.specPlayerEnforceUniqueRingTrinketPairs && ViolatesSpecPlayerTwinSlotRule(bot, slot, proto))
+        return false;
+
+    return true;
+}
+
+bool IsValidTargetBandGearItem(Player* bot, uint8 slot, ItemTemplate const* proto, float targetAverageIlvl, ModuleConfig const& config,
+                               bool applySpecPlayerRestrictions)
+{
+    if (applySpecPlayerRestrictions)
+        return IsValidSpecPlayerGearItem(bot, slot, proto, targetAverageIlvl, config);
+
+    return IsValidGearItemForTargetBand(proto, targetAverageIlvl, config);
+}
+
+bool IsSpecPlayerGearWithinTargetBand(Player* bot, float targetAverageIlvl, ModuleConfig const& config)
+{
+    if (!bot || targetAverageIlvl <= 0.0f)
+        return true;
+
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        if (slot == EQUIPMENT_SLOT_BODY || slot == EQUIPMENT_SLOT_TABARD)
+            continue;
+
+        Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item)
+            continue;
+
+        if (!IsValidTargetBandGearItem(bot, slot, item->GetTemplate(), targetAverageIlvl, config, true))
+            return false;
+    }
+
+    return true;
 }
 
 bool IsPrimaryArmorSlot(uint8 slot)
@@ -1443,14 +1867,14 @@ bool CanEquipUnseenItemForModule(Player* bot, uint8 slot, uint16& dest, uint32 i
 
 void EquipPreferredArmorForSlot(Player* bot, StatsWeightCalculator& calculator, uint8 slot, uint32 preferredSubClass,
                                 uint32 gearScoreLimit, uint32 qualityLimit, float targetAverageIlvl,
-                                ModuleConfig const* config)
+                                ModuleConfig const* config, bool applySpecPlayerRestrictions = false, uint8 levelSearchWindow = 10)
 {
     std::vector<InventoryType> const inventoryTypes = GetArmorInventoryTypesForSlot(slot);
     if (inventoryTypes.empty())
         return;
 
     int32 const level = static_cast<int32>(bot->GetLevel());
-    int32 const minLevel = std::max(level - std::min(level, 10), 1);
+    int32 const minLevel = std::max(level - std::min(level, static_cast<int32>(levelSearchWindow)), 1);
 
     float bestScore = -1.0f;
     uint32 bestItemId = 0;
@@ -1481,7 +1905,7 @@ void EquipPreferredArmorForSlot(Player* bot, StatsWeightCalculator& calculator, 
                 if (proto->RequiredLevel > bot->GetLevel() || proto->Duration != 0 || proto->Bonding == BIND_QUEST_ITEM)
                     continue;
 
-                if (config && !IsItemLevelWithinTargetBand(proto->ItemLevel, targetAverageIlvl, *config))
+                if (config && !IsValidTargetBandGearItem(bot, slot, proto, targetAverageIlvl, *config, applySpecPlayerRestrictions))
                     continue;
 
                 uint16 dest = 0;
@@ -1549,7 +1973,7 @@ void EnforcePreferredArmorTier(Player* bot, uint32 gearScoreLimit, uint32 qualit
 }
 
 void EnforceTargetItemLevelBand(Player* bot, uint32 gearScoreLimit, uint32 qualityLimit, float targetAverageIlvl,
-                                ModuleConfig const& config)
+                                ModuleConfig const& config, bool applySpecPlayerRestrictions = false, uint8 levelSearchWindow = 10)
 {
     if (!bot || targetAverageIlvl <= 0.0f)
         return;
@@ -1566,7 +1990,7 @@ void EnforceTargetItemLevelBand(Player* bot, uint32 gearScoreLimit, uint32 quali
     };
 
     int32 const level = static_cast<int32>(bot->GetLevel());
-    int32 const minLevel = std::max(level - std::min(level, 10), 1);
+    int32 const minLevel = std::max(level - std::min(level, static_cast<int32>(levelSearchWindow)), 1);
 
     for (uint8 slot : initSlotsOrder)
     {
@@ -1574,8 +1998,8 @@ void EnforceTargetItemLevelBand(Player* bot, uint32 gearScoreLimit, uint32 quali
         if (equipped)
         {
             ItemTemplate const* equippedProto = equipped->GetTemplate();
-            if (equippedProto && equippedProto->Quality > ITEM_QUALITY_NORMAL &&
-                IsItemLevelWithinTargetBand(equippedProto->ItemLevel, targetAverageIlvl, config))
+            if (equippedProto &&
+                IsValidTargetBandGearItem(bot, slot, equippedProto, targetAverageIlvl, config, applySpecPlayerRestrictions))
             {
                 continue;
             }
@@ -1604,7 +2028,7 @@ void EnforceTargetItemLevelBand(Player* bot, uint32 gearScoreLimit, uint32 quali
                     if (proto->Quality <= ITEM_QUALITY_NORMAL || proto->Quality > qualityLimit)
                         continue;
 
-                    if (!IsItemLevelWithinTargetBand(proto->ItemLevel, targetAverageIlvl, config))
+                    if (!IsValidTargetBandGearItem(bot, slot, proto, targetAverageIlvl, config, applySpecPlayerRestrictions))
                         continue;
 
                     if (proto->RequiredLevel > bot->GetLevel() || proto->Duration != 0 || proto->Bonding == BIND_QUEST_ITEM)
@@ -1659,11 +2083,11 @@ void EnforceTargetItemLevelBand(Player* bot, uint32 gearScoreLimit, uint32 quali
             continue;
 
         ItemTemplate const* proto = equipped->GetTemplate();
-        if (!proto || IsItemLevelWithinTargetBand(proto->ItemLevel, targetAverageIlvl, config))
+        if (!proto || IsValidTargetBandGearItem(bot, slot, proto, targetAverageIlvl, config, applySpecPlayerRestrictions))
             continue;
 
         EquipPreferredArmorForSlot(bot, calculator, slot, preferredArmorSubClass, gearScoreLimit, qualityLimit,
-                                   targetAverageIlvl, &config);
+                                   targetAverageIlvl, &config, applySpecPlayerRestrictions, levelSearchWindow);
     }
 }
 
@@ -1739,6 +2163,14 @@ void RunGearPass(Player* bot, uint32 gearScoreLimit, uint32 qualityLimit, float 
     EnforceTargetItemLevelBand(bot, gearScoreLimit, qualityLimit, targetAverageIlvl, config);
 }
 
+void RunGearPass(Player* bot, uint32 gearScoreLimit, uint32 qualityLimit, float targetAverageIlvl, ModuleConfig const& config,
+                 bool applySpecPlayerRestrictions, uint8 levelSearchWindow)
+{
+    RunGearPass(bot, gearScoreLimit, qualityLimit);
+    EnforceTargetItemLevelBand(bot, gearScoreLimit, qualityLimit, targetAverageIlvl, config, applySpecPlayerRestrictions,
+                               levelSearchWindow);
+}
+
 /* Build a readable target-ilvl label from mode/ratio policy.
  * Ratio mode prints a numeric target when possible; otherwise it reports fallback.
  */
@@ -1782,7 +2214,7 @@ void ApplyAutoGear(Player* bot, Player* commandSender, ModuleConfig const& confi
             for (uint8 attempt = 0; attempt < config.gearRetryCount; ++attempt)
             {
                 DestroyOldGear(bot);
-                RunGearPass(bot, gearScoreLimit, config.gearQualityCapRatioMode);
+                RunGearPass(bot, gearScoreLimit, config.gearQualityCapRatioMode, targetAverageIlvl, config);
 
                 if (IsGearWithinTargetBand(bot, targetAverageIlvl, config))
                     break;
@@ -1819,6 +2251,31 @@ void RunPostSpecMaintenance(Player* bot, ExpansionCap cap)
     /* Pet talents are expansion-gated, same as glyph expectations. */
 
     if (cap == ExpansionCap::Wrath || !sPlayerbotAIConfig.limitTalentsExpansion)
+        factory.InitPetTalents();
+}
+
+void RunSpecPlayerPostSpecMaintenance(Player* bot, ExpansionCap cap, ModuleConfig const& config)
+{
+    if (!bot)
+        return;
+
+    PlayerbotFactory factory(bot, bot->GetLevel());
+
+    if (config.specPlayerPostGlyphs)
+    {
+        if (cap == ExpansionCap::Wrath || !sPlayerbotAIConfig.limitTalentsExpansion)
+            factory.InitGlyphs(false);
+        else
+            ClearGlyphs(bot);
+    }
+
+    if (config.specPlayerPostConsumables)
+        factory.InitConsumables();
+
+    if (config.specPlayerPostPet)
+        factory.InitPet();
+
+    if (config.specPlayerPostPetTalents && (cap == ExpansionCap::Wrath || !sPlayerbotAIConfig.limitTalentsExpansion))
         factory.InitPetTalents();
 }
 
@@ -2014,6 +2471,13 @@ bool ProcessSpecForBot(Player* commandSender, uint32 chatType, std::string const
             continue;
         }
 
+        if (!spec.errorMessage.empty())
+        {
+            result.failed++;
+            botAI->TellMasterNoFacing("spec: " + spec.errorMessage);
+            continue;
+        }
+
         /* Stage 5: resolve requested profile and map it to a premade spec template index. */
 
         ResolvedSpec resolved;
@@ -2047,12 +2511,15 @@ bool ProcessSpecForBot(Player* commandSender, uint32 chatType, std::string const
         }
 
         RunPostSpecMaintenance(bot, cap);
+        LearnSpellsForCurrentLevel(bot);
+        if (spec.professions.first != 0 && spec.professions.second != 0)
+            ApplyRequestedPrimaryProfessions(bot, spec.professions);
+        NormalizeKnownSkillsToLevelCap(bot);
+        NormalizeRidingSkillForLevel(bot);
 
         if (ShouldAutoGear(bot, spec.gearRequested, config))
             ApplyAutoGear(bot, commandSender, config);
 
-        LearnSpellsForCurrentLevel(bot);
-        NormalizeRidingSkillForLevel(bot);
         ResetBotAIAndActions(botAI);
 
         result.updated++;
@@ -2263,14 +2730,14 @@ void ApplyGearSelf(Player* player)
     }
 }
 
-uint32 GetSpecPlayerTargetAverageIlvl(uint8 targetLevel)
+uint32 GetSpecPlayerTargetAverageIlvl(uint8 targetLevel, ModuleConfig const& config)
 {
     switch (targetLevel)
     {
         case 60:
-            return 62;
+            return config.specPlayerTargetAverageIlvl60;
         case 70:
-            return 105;
+            return config.specPlayerTargetAverageIlvl70;
         default:
             return targetLevel;
     }
@@ -2278,21 +2745,22 @@ uint32 GetSpecPlayerTargetAverageIlvl(uint8 targetLevel)
 
 void ApplySpecPlayerGear(Player* player, uint8 targetLevel, ModuleConfig const& config)
 {
-    float const targetAverageIlvl = static_cast<float>(GetSpecPlayerTargetAverageIlvl(targetLevel));
+    float const targetAverageIlvl = static_cast<float>(GetSpecPlayerTargetAverageIlvl(targetLevel, config));
     uint32 const targetIlvl = static_cast<uint32>(targetAverageIlvl);
     uint32 gearScoreLimit = ComputeGearScoreLimitFromAverageIlvl(targetAverageIlvl);
 
-    for (uint8 attempt = 0; attempt < 6; ++attempt)
+    for (uint8 attempt = 0; attempt < config.specPlayerGearRetryCount; ++attempt)
     {
         DestroyOldGear(player);
 
         /* Specplayer should stay in green/blue/purple bands and also correct
          * individual outlier slots toward the requested average ilvl.
          */
-        RunGearPass(player, gearScoreLimit, ITEM_QUALITY_EPIC, targetAverageIlvl, config);
+        RunGearPass(player, gearScoreLimit, config.specPlayerGearQualityCap, targetAverageIlvl, config, true,
+                    config.specPlayerGearLevelSearchWindow);
 
         uint32 const currentIlvl = static_cast<uint32>(player->GetAverageItemLevelForDF());
-        if (currentIlvl == 0 || IsGearWithinTargetBand(player, targetAverageIlvl, config))
+        if (currentIlvl == 0 || IsSpecPlayerGearWithinTargetBand(player, targetAverageIlvl, config))
             break;
 
         float const scaled = static_cast<float>(gearScoreLimit) * static_cast<float>(targetIlvl) / static_cast<float>(currentIlvl);
@@ -2516,12 +2984,15 @@ bool ApplySpecPlayerSetup(Player* target, std::string const& requestedProfile, u
         return false;
     }
 
-    RunPostSpecMaintenance(target, cap);
+    RunSpecPlayerPostSpecMaintenance(target, cap, config);
     LearnSpellsForCurrentLevel(target);
-    ApplyRequestedPrimaryProfessions(target, professions);
-    NormalizeKnownSkillsToLevelCap(target);
-    RemoveLevel60EpicClassMountSpellsForSpecPlayer(target);
-    NormalizeRidingSkillForLevel(target);
+    if (config.specPlayerApplyPrimaryProfessions)
+        ApplyRequestedPrimaryProfessions(target, professions);
+    if (config.specPlayerNormalizeKnownSkills)
+        NormalizeKnownSkillsToLevelCap(target);
+    if (config.specPlayerRemoveLevel60EpicClassMountSpells)
+        RemoveLevel60EpicClassMountSpellsForSpecPlayer(target);
+    NormalizeSpecPlayerRidingForLevel(target, config);
     ApplySpecPlayerGear(target, targetLevel, config);
 
     if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(target))
@@ -2543,6 +3014,17 @@ void ProcessOfflineSpecPlayerOnLogin(Player* player)
         return;
 
     ModuleConfig const config = LoadModuleConfig();
+    if (!config.enabled)
+        return;
+
+    ChatHandler handler(player->GetSession());
+
+    if (!config.specPlayerAllowOfflineQueue)
+    {
+        ClearOfflineSpecPlayerRequest(player->GetGUID().GetCounter());
+        handler.SendSysMessage("specplayer: pending offline setup discarded because PlayerbotBetterSetup.SpecPlayer.AllowOfflineQueue = 0.");
+        return;
+    }
 
     std::string appliedCanonical;
     std::string errorMessage;
@@ -2550,7 +3032,6 @@ void ProcessOfflineSpecPlayerOnLogin(Player* player)
 
     ClearOfflineSpecPlayerRequest(player->GetGUID().GetCounter());
 
-    ChatHandler handler(player->GetSession());
     if (!applied)
     {
         handler.SendSysMessage("specplayer: pending offline setup failed and was discarded: " + errorMessage);
@@ -2588,7 +3069,7 @@ public:
     {
         static Acore::ChatCommands::ChatCommandTable commandTable =
         {
-            { "specplayer", HandleSpecPlayerCommand, SEC_GAMEMASTER, Acore::ChatCommands::Console::Yes }
+            { "specplayer", HandleSpecPlayerCommand, SEC_PLAYER, Acore::ChatCommands::Console::Yes }
         };
 
         return commandTable;
@@ -2602,19 +3083,20 @@ public:
         if (!handler)
             return false;
 
-        uint8 const accountLevel = handler->IsConsole()
-            ? uint8(SEC_CONSOLE)
-            : static_cast<uint8>(handler->GetSession()->GetSecurity());
-        if (!handler->IsConsole() && accountLevel < 2)
-        {
-            handler->PSendSysMessage("specplayer: account level 2 required (current {}).", uint32(accountLevel));
-            return false;
-        }
-
         ModuleConfig const config = LoadModuleConfig();
         if (!config.enabled)
         {
             handler->SendSysMessage("specplayer: module is disabled (PlayerbotBetterSetup.Spec.Enable = 0).");
+            return false;
+        }
+
+        uint8 const accountLevel = handler->IsConsole()
+            ? uint8(SEC_CONSOLE)
+            : static_cast<uint8>(handler->GetSession()->GetSecurity());
+        if (!handler->IsConsole() && accountLevel < config.specPlayerMinSecurity)
+        {
+            handler->PSendSysMessage("specplayer: account level {} required (current {}).",
+                                     uint32(config.specPlayerMinSecurity), uint32(accountLevel));
             return false;
         }
 
@@ -2684,6 +3166,12 @@ public:
 
         if (!target)
         {
+            if (!config.specPlayerAllowOfflineQueue)
+            {
+                handler->SendSysMessage("specplayer: offline queue is disabled (PlayerbotBetterSetup.SpecPlayer.AllowOfflineQueue = 0).");
+                return false;
+            }
+
             SaveOfflineSpecPlayerRequest(targetGuid.GetCounter(), resolvedCanonical, targetLevel, requestedProfessions);
             if (requestedProfessions.first != 0 && requestedProfessions.second != 0)
             {
