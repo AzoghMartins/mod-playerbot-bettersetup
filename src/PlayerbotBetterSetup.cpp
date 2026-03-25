@@ -11,10 +11,14 @@
 #include "DBCStores.h"
 #include "Item.h"
 #include "ObjectMgr.h"
+#include "Pet.h"
 #include "Player.h"
 #include "Random.h"
 #include "ScriptMgr.h"
+#include "SpellAuraDefines.h"
+#include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "Trainer.h"
 #include "World.h"
 
 #include "ChatFilter.h"
@@ -88,7 +92,6 @@ constexpr char const* CONF_SPECPLAYER_ENFORCE_UNIQUE_RING_TRINKET_PAIRS =
     "PlayerbotBetterSetup.SpecPlayer.EnforceUniqueRingTrinketPairs";
 constexpr char const* CONF_SPECPLAYER_GEAR_LEVEL_SEARCH_WINDOW = "PlayerbotBetterSetup.SpecPlayer.GearLevelSearchWindow";
 constexpr char const* CONF_LOGIN_DIAGNOSTICS_ENABLE = "PlayerbotBetterSetup.LoginDiagnostics.Enable";
-constexpr char const* CONF_GEARSELF_MIN_SECURITY = "PlayerbotBetterSetup.GearSelf.MinSecurityLevel";
 constexpr char const* OFFLINE_SPECPLAYER_SOURCE = "mod-playerbot-bettersetup-specplayer";
 
 /* These helpers do the civil-service work:
@@ -201,6 +204,95 @@ std::array<uint16, 11> const& GetPrimaryProfessionSkillIds()
     };
 
     return primaryProfessionSkillIds;
+}
+
+std::array<uint16, 3> const& GetSecondaryProfessionSkillIds()
+{
+    static std::array<uint16, 3> secondaryProfessionSkillIds = {
+        SKILL_FIRST_AID,
+        SKILL_FISHING,
+        SKILL_COOKING
+    };
+
+    return secondaryProfessionSkillIds;
+}
+
+struct SecondaryProfessionRankSpell
+{
+    uint16 requiredMaxSkill;
+    uint32 spellId;
+};
+
+std::array<SecondaryProfessionRankSpell, 6> const& GetSecondaryProfessionRankSpells(uint16 skillId)
+{
+    static std::array<SecondaryProfessionRankSpell, 6> firstAidRankSpells = {
+        SecondaryProfessionRankSpell{ 1, 3273 },
+        SecondaryProfessionRankSpell{ 76, 3274 },
+        SecondaryProfessionRankSpell{ 151, 7924 },
+        SecondaryProfessionRankSpell{ 226, 10846 },
+        SecondaryProfessionRankSpell{ 301, 27028 },
+        SecondaryProfessionRankSpell{ 376, 45542 }
+    };
+    static std::array<SecondaryProfessionRankSpell, 6> fishingRankSpells = {
+        SecondaryProfessionRankSpell{ 1, 7620 },
+        SecondaryProfessionRankSpell{ 76, 7731 },
+        SecondaryProfessionRankSpell{ 151, 7732 },
+        SecondaryProfessionRankSpell{ 226, 18248 },
+        SecondaryProfessionRankSpell{ 301, 33095 },
+        SecondaryProfessionRankSpell{ 376, 51294 }
+    };
+    static std::array<SecondaryProfessionRankSpell, 6> cookingRankSpells = {
+        SecondaryProfessionRankSpell{ 1, 2550 },
+        SecondaryProfessionRankSpell{ 76, 3102 },
+        SecondaryProfessionRankSpell{ 151, 3413 },
+        SecondaryProfessionRankSpell{ 226, 18260 },
+        SecondaryProfessionRankSpell{ 301, 33359 },
+        SecondaryProfessionRankSpell{ 376, 51296 }
+    };
+
+    switch (skillId)
+    {
+        case SKILL_FIRST_AID:
+            return firstAidRankSpells;
+        case SKILL_FISHING:
+            return fishingRankSpells;
+        case SKILL_COOKING:
+        default:
+            return cookingRankSpells;
+    }
+}
+
+std::array<uint32, 4> const& GetRidingRankSpellIds()
+{
+    static std::array<uint32, 4> ridingRankSpellIds = {
+        33388,
+        33391,
+        34090,
+        34091
+    };
+
+    return ridingRankSpellIds;
+}
+
+struct RidingStateSnapshot
+{
+    bool hadSkill = false;
+    uint16 step = 0;
+    uint16 value = 0;
+    uint16 maxValue = 0;
+    std::array<bool, 4> knownRankSpells = {};
+};
+
+bool IsPrimaryProfessionSkillId(uint32 skillId)
+{
+    auto const& primaryProfessionSkillIds = GetPrimaryProfessionSkillIds();
+    return std::find(primaryProfessionSkillIds.begin(), primaryProfessionSkillIds.end(), skillId) != primaryProfessionSkillIds.end();
+}
+
+bool IsSecondaryProfessionSkillId(uint32 skillId)
+{
+    auto const& secondaryProfessionSkillIds = GetSecondaryProfessionSkillIds();
+    return std::find(secondaryProfessionSkillIds.begin(), secondaryProfessionSkillIds.end(), skillId) != secondaryProfessionSkillIds.end();
 }
 
 std::unordered_map<std::string, uint16> const& GetProfessionAliases()
@@ -399,6 +491,7 @@ bool ParseRequestedProfessions(std::string const& skill1Arg, std::string const& 
 
 void ApplyRequestedPrimaryProfessions(Player* target, ProfessionPair professions);
 void NormalizeKnownSkillsToLevelCap(Player* target);
+void ResetBotAIAndActions(PlayerbotAI* botAI);
 
 struct ModuleConfig
 {
@@ -406,7 +499,6 @@ struct ModuleConfig
     bool requireMasterControl = true;
     bool showSpecListOnEmpty = true;
     bool loginDiagnosticsEnable = true;
-    uint8 gearSelfMinSecurity = SEC_GAMEMASTER;
 
     bool autoGearRndBots = true;
     bool autoGearAltBots = false;
@@ -460,7 +552,6 @@ ModuleConfig LoadModuleConfig()
     config.requireMasterControl = sConfigMgr->GetOption<bool>(CONF_REQUIRE_MASTER_CONTROL, true);
     config.showSpecListOnEmpty = sConfigMgr->GetOption<bool>(CONF_SHOW_SPEC_LIST_ON_EMPTY, true);
     config.loginDiagnosticsEnable = sConfigMgr->GetOption<bool>(CONF_LOGIN_DIAGNOSTICS_ENABLE, true);
-    config.gearSelfMinSecurity = static_cast<uint8>(sConfigMgr->GetOption<uint32>(CONF_GEARSELF_MIN_SECURITY, SEC_GAMEMASTER));
 
     config.autoGearRndBots = sConfigMgr->GetOption<bool>(CONF_AUTO_GEAR_RNDBOTS, true);
     config.autoGearAltBots = sConfigMgr->GetOption<bool>(CONF_AUTO_GEAR_ALTBOTS, false);
@@ -524,7 +615,6 @@ ModuleConfig LoadModuleConfig()
     config.gearRetryCount = std::clamp<uint8>(config.gearRetryCount, 1, 20);
     config.gearQualityCapRatioMode = std::clamp<uint8>(config.gearQualityCapRatioMode, ITEM_QUALITY_NORMAL, ITEM_QUALITY_LEGENDARY);
     config.gearQualityCapTopForLevel = std::clamp<uint8>(config.gearQualityCapTopForLevel, ITEM_QUALITY_NORMAL, ITEM_QUALITY_LEGENDARY);
-    config.gearSelfMinSecurity = std::clamp<uint8>(config.gearSelfMinSecurity, SEC_PLAYER, SEC_ADMINISTRATOR);
     config.specPlayerMinSecurity = std::clamp<uint8>(config.specPlayerMinSecurity, SEC_PLAYER, SEC_ADMINISTRATOR);
     config.specPlayerRidingBasicLevel = std::clamp<uint8>(config.specPlayerRidingBasicLevel, 1, std::numeric_limits<uint8>::max());
     config.specPlayerRidingAdvancedLevel = std::clamp<uint8>(config.specPlayerRidingAdvancedLevel, config.specPlayerRidingBasicLevel,
@@ -622,7 +712,7 @@ ClassSpecMap const& GetClassSpecProfiles()
             CLASS_HUNTER,
             {
                 {
-                    { "beastmaster", { "beastmaster", "bm" }, { "bm", "beast" }, { 0 } },
+                    { "beastmaster", { "beastmaster", "beastmastery", "beast mastery", "bm" }, { "bm", "beast" }, { 0 } },
                     { "marksman", { "marksman", "mm" }, { "mm", "marksman", "marksmanship" }, { 1 } },
                     { "survival", { "survival", "surv", "sv" }, { "surv", "survival" }, { 2 } },
                 },
@@ -665,8 +755,8 @@ ClassSpecMap const& GetClassSpecProfiles()
             CLASS_DEATH_KNIGHT,
             {
                 {
-                    { "blood_tank", { "blood_tank", "bloodtank", "bdkt" }, { "blood" }, { 0 } },
-                    { "blood_dps", { "blood_dps", "blooddps", "bdkd" }, { "double aura blood", "blood dps", "blood" }, { 3, 0 } },
+                    { "blood_tank", { "blood_tank", "blood tank", "bloodtank", "bdkt" }, { "blood" }, { 0 } },
+                    { "blood_dps", { "blood_dps", "blood dps", "blooddps", "bdkd" }, { "double aura blood", "blood dps", "blood" }, { 3, 0 } },
                     { "frost", { "frost", "fr" }, { "frost" }, { 1 } },
                     { "unholy", { "unholy", "uh" }, { "unholy" }, { 2 } },
                 },
@@ -726,8 +816,8 @@ ClassSpecMap const& GetClassSpecProfiles()
             {
                 {
                     { "balance", { "balance", "bal" }, { "balance" }, { 0 } },
-                    { "feral_tank", { "feral_tank", "feraltank", "bear" }, { "bear" }, { 1 } },
-                    { "feral_dps", { "feral_dps", "feraldps", "cat" }, { "cat" }, { 3 } },
+                    { "feral_tank", { "feral_tank", "feral tank", "feraltank", "bear" }, { "bear" }, { 1 } },
+                    { "feral_dps", { "feral_dps", "feral dps", "feraldps", "cat" }, { "cat" }, { 3 } },
                     { "restoration", { "restoration", "resto" }, { "resto", "restoration" }, { 2 } },
                 },
                 {
@@ -885,37 +975,6 @@ std::string BuildSpecListMessageForClass(uint8 classId)
 
     ClassSpecProfile const& profile = profileIt->second;
 
-    std::vector<std::string> roleParts;
-    std::vector<std::string> roleOrder = { "tank", "heal", "melee", "ranged", "dps" };
-
-    /* Build role summaries in a fixed order so output stays predictable for humans. */
-
-    for (std::string const& role : roleOrder)
-    {
-        auto const roleIt = profile.roles.find(role);
-        if (roleIt == profile.roles.end() || roleIt->second.empty())
-            continue;
-
-        if (roleIt->second.size() == 1)
-        {
-            roleParts.push_back(role + " (" + FormatCanonicalName(roleIt->second.front()) + ")");
-            continue;
-        }
-
-        std::ostringstream options;
-        for (size_t i = 0; i < roleIt->second.size(); ++i)
-        {
-            if (i != 0)
-                options << '/';
-
-            options << FormatCanonicalName(roleIt->second[i]);
-        }
-
-        roleParts.push_back(role + " (random " + options.str() + ")");
-    }
-
-    /* Build the exact list for players who prefer precision over destiny. */
-
     std::ostringstream exact;
     for (size_t i = 0; i < profile.specs.size(); ++i)
     {
@@ -925,24 +984,7 @@ std::string BuildSpecListMessageForClass(uint8 classId)
         exact << FormatCanonicalName(profile.specs[i].canonical);
     }
 
-    /* Stitch the final response sentence for whisper output. */
-
-    std::ostringstream message;
-    message << "Valid specs: ";
-
-    for (size_t i = 0; i < roleParts.size(); ++i)
-    {
-        if (i != 0)
-            message << ", ";
-
-        message << roleParts[i];
-    }
-
-    if (!roleParts.empty())
-        message << ". ";
-
-    message << "Exact: " << exact.str() << '.';
-    return message.str();
+    return "Available specs: " + exact.str() + '.';
 }
 
 std::string BuildSpecListMessage(Player* bot)
@@ -953,35 +995,73 @@ std::string BuildSpecListMessage(Player* bot)
     return BuildSpecListMessageForClass(bot->getClass());
 }
 
-struct ParsedSpecCommand
+enum class BotCommandType
 {
-    bool isSpecCommand = false;
+    None,
+    Setup,
+    Spec,
+    Restock,
+    PetTank
+};
+
+struct ParsedBotCommand
+{
+    BotCommandType type = BotCommandType::None;
     bool listOnly = false;
-    bool gearRequested = false;
-    std::string profile;
-    ProfessionPair professions = { 0, 0 };
+    bool petTankEnabled = false;
+    std::string specProfile;
     std::string errorMessage;
 };
 
-/* Parse "spec", "spec <profile>", "spec <profile> gear",
- * and optional profession pairs near the end of the command.
- * Anything else is politely ignored so raid chat can continue discussing fish feasts.
- */
-
-ParsedSpecCommand ParseSpecCommand(std::string const& command)
+ParsedBotCommand ParseBotCommand(std::string const& command)
 {
-    ParsedSpecCommand parsed;
+    ParsedBotCommand parsed;
 
     std::vector<std::string> words = SplitWords(command);
     if (words.empty())
         return parsed;
 
-    /* If it does not start with 'spec', we leave it alone and let chat be chat. */
+    std::string const verb = NormalizeToken(words.front());
 
-    if (NormalizeToken(words.front()) != "spec")
+    if (verb == "setup")
+    {
+        parsed.type = BotCommandType::Setup;
+        if (words.size() != 1)
+            parsed.errorMessage = "setup takes no arguments.";
+        return parsed;
+    }
+
+    if (verb == "restock")
+    {
+        parsed.type = BotCommandType::Restock;
+        if (words.size() != 1)
+            parsed.errorMessage = "restock takes no arguments.";
+        return parsed;
+    }
+
+    if (verb == "pettank")
+    {
+        parsed.type = BotCommandType::PetTank;
+        if (words.size() != 2)
+        {
+            parsed.errorMessage = "usage: pettank <on|off>.";
+            return parsed;
+        }
+
+        std::string const value = NormalizeToken(words[1]);
+        if (value == "on")
+            parsed.petTankEnabled = true;
+        else if (value == "off")
+            parsed.petTankEnabled = false;
+        else
+            parsed.errorMessage = "usage: pettank <on|off>.";
+        return parsed;
+    }
+
+    if (verb != "spec")
         return parsed;
 
-    parsed.isSpecCommand = true;
+    parsed.type = BotCommandType::Spec;
 
     if (words.size() == 1)
     {
@@ -989,100 +1069,16 @@ ParsedSpecCommand ParseSpecCommand(std::string const& command)
         return parsed;
     }
 
-    auto const consumeTrailingGear = [&]()
-    {
-        if (words.size() <= 1 || NormalizeToken(words.back()) != "gear")
-            return false;
-
-        parsed.gearRequested = true;
-        words.pop_back();
-        return true;
-    };
-
-    auto const looksLikeProfession = [](std::string const& token)
-    {
-        uint16 skillId = 0;
-        return ResolveProfessionSkill(token, skillId);
-    };
-
-    consumeTrailingGear();
-
-    if (words.size() >= 4)
-    {
-        ProfessionPair professions = { 0, 0 };
-        std::string professionError;
-
-        if (ParseRequestedProfessions(words[words.size() - 2], words[words.size() - 1], professions, professionError))
-        {
-            parsed.professions = professions;
-            words.pop_back();
-            words.pop_back();
-        }
-        else if (looksLikeProfession(words[words.size() - 2]) || looksLikeProfession(words[words.size() - 1]))
-        {
-            parsed.errorMessage = professionError;
-            return parsed;
-        }
-    }
-
-    consumeTrailingGear();
-
-    if (words.size() == 1)
-    {
-        if (parsed.professions.first != 0 || parsed.professions.second != 0)
-        {
-            parsed.errorMessage = "spec profile required before profession arguments.";
-            return parsed;
-        }
-
-        parsed.listOnly = true;
-        return parsed;
-    }
-
-    if (words.size() == 3 && looksLikeProfession(words[1]) && looksLikeProfession(words[2]))
-    {
-        parsed.errorMessage = "spec profile required before profession arguments.";
-        return parsed;
-    }
-
-    if (looksLikeProfession(words.back()))
-    {
-        parsed.errorMessage = "provide both skill1 and skill2, or omit both.";
-        return parsed;
-    }
-
-    /* Whatever survives after the command verb is the requested profile token. */
-
-    parsed.profile = JoinWords(words, 1);
+    parsed.specProfile = JoinWords(words, 1);
     return parsed;
-}
-
-/* Parse a plain "gearself" command token. Extra words are ignored on purpose
- * so people can append notes without derailing the operation.
- */
-
-bool IsGearSelfCommand(std::string const& command)
-{
-    std::vector<std::string> words = SplitWords(command);
-    if (words.empty())
-        return false;
-
-    return NormalizeToken(words.front()) == "gearself";
 }
 
 struct ResolvedSpec
 {
     SpecDefinition const* definition = nullptr;
-    bool fromRole = false;
 };
 
-/* Resolve what the user asked into an exact spec definition.
- * - Exact aliases: deterministic.
- * - Role umbrella (tank/heal/melee/ranged/dps): uniform random among mapped options.
- * The random branch is intentionally fair; fate should at least be evenly distributed.
- */
-
-bool ResolveRequestedSpec(uint8 classId, std::string const& requestedProfile, ResolvedSpec& resolved)
+bool ResolveRequestedSpec(uint8 classId, std::string const& requestedProfile, ResolvedSpec& resolved, bool allowRoleSelection = true)
 {
     auto const& profiles = GetClassSpecProfiles();
     auto const profileIt = profiles.find(classId);
@@ -1102,12 +1098,12 @@ bool ResolveRequestedSpec(uint8 classId, std::string const& requestedProfile, Re
                 continue;
 
             resolved.definition = &exact;
-            resolved.fromRole = false;
             return true;
         }
     }
 
-    /* No exact hit: treat input as a role umbrella and roll uniformly inside it. */
+    if (!allowRoleSelection)
+        return false;
 
     auto const roleIt = profile.roles.find(requestedNorm);
     if (roleIt == profile.roles.end() || roleIt->second.empty())
@@ -1118,13 +1114,12 @@ bool ResolveRequestedSpec(uint8 classId, std::string const& requestedProfile, Re
     std::string const& selectedCanonical = options[selectedIndex];
 
     resolved.definition = FindSpecDefinition(profile, selectedCanonical);
-    resolved.fromRole = true;
     return resolved.definition != nullptr;
 }
 
-bool ResolveRequestedSpec(Player* bot, std::string const& requestedProfile, ResolvedSpec& resolved)
+bool ResolveRequestedSpec(Player* bot, std::string const& requestedProfile, ResolvedSpec& resolved, bool allowRoleSelection = true)
 {
-    return bot && ResolveRequestedSpec(bot->getClass(), requestedProfile, resolved);
+    return bot && ResolveRequestedSpec(bot->getClass(), requestedProfile, resolved, allowRoleSelection);
 }
 
 enum class ExpansionCap
@@ -2336,6 +2331,244 @@ void LearnQuestClassSpells(Player* bot)
     }
 }
 
+uint32 GetProfessionSkillLineFromSpell(uint32 spellId)
+{
+    if (!spellId)
+        return 0;
+
+    SkillLineAbilityMapBounds bounds = sSpellMgr->GetSkillLineAbilityMapBounds(spellId);
+    for (auto itr = bounds.first; itr != bounds.second; ++itr)
+    {
+        uint32 const skillLine = itr->second->SkillLine;
+        if (IsPrimaryProfessionSkillId(skillLine) || IsSecondaryProfessionSkillId(skillLine))
+            return skillLine;
+    }
+
+    return 0;
+}
+
+uint32 ResolveTrainerSpellSkillLine(Trainer::Trainer* trainer, Trainer::Spell const* trainerSpell)
+{
+    if (!trainerSpell)
+        return 0;
+
+    if (trainerSpell->ReqSkillLine &&
+        (IsPrimaryProfessionSkillId(trainerSpell->ReqSkillLine) || IsSecondaryProfessionSkillId(trainerSpell->ReqSkillLine)))
+    {
+        return trainerSpell->ReqSkillLine;
+    }
+
+    SpellInfo const* trainerSpellInfo = sSpellMgr->GetSpellInfo(trainerSpell->SpellId);
+    if (trainerSpellInfo)
+    {
+        for (SpellEffectInfo const& effect : trainerSpellInfo->GetEffects())
+        {
+            if (!effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) || !effect.TriggerSpell)
+                continue;
+
+            uint32 const skillLine = GetProfessionSkillLineFromSpell(effect.TriggerSpell);
+            if (skillLine)
+                return skillLine;
+        }
+    }
+
+    uint32 const spellSkillLine = GetProfessionSkillLineFromSpell(trainerSpell->SpellId);
+    if (spellSkillLine)
+        return spellSkillLine;
+
+    return trainer ? GetProfessionSkillLineFromSpell(trainer->GetTrainerRequirement()) : 0;
+}
+
+bool ShouldTeachTrainerSpell(Player* bot, Trainer::Trainer* trainer, Trainer::Spell const* trainerSpell,
+                             bool allowPrimaryProfessionSpells)
+{
+    if (!bot || !trainer || !trainerSpell || !trainer->CanTeachSpell(bot, trainerSpell))
+        return false;
+
+    if (trainer->GetTrainerType() == Trainer::Type::Class)
+        return true;
+
+    if (trainer->GetTrainerType() != Trainer::Type::Tradeskill)
+        return false;
+
+    uint32 const skillLine = ResolveTrainerSpellSkillLine(trainer, trainerSpell);
+    if (IsSecondaryProfessionSkillId(skillLine))
+        return true;
+
+    return allowPrimaryProfessionSpells && IsPrimaryProfessionSkillId(skillLine);
+}
+
+std::vector<uint32> const& GetTrainerIdsForClass(uint8 classId)
+{
+    static std::unordered_map<uint8, std::vector<uint32>> trainerIdsByClass;
+    auto [it, inserted] = trainerIdsByClass.try_emplace(classId);
+    std::vector<uint32>& trainerIds = it->second;
+
+    if (!inserted)
+        return trainerIds;
+
+    CreatureTemplateContainer const* creatureTemplateContainer = sObjectMgr->GetCreatureTemplates();
+    for (CreatureTemplateContainer::const_iterator itr = creatureTemplateContainer->begin();
+         itr != creatureTemplateContainer->end(); ++itr)
+    {
+        Trainer::Trainer* trainer = sObjectMgr->GetTrainer(itr->first);
+        if (!trainer)
+            continue;
+
+        if (trainer->GetTrainerType() != Trainer::Type::Tradeskill && trainer->GetTrainerType() != Trainer::Type::Class)
+            continue;
+
+        if (trainer->GetTrainerType() == Trainer::Type::Class)
+            trainerIds.push_back(itr->first);
+        else
+            trainerIds.push_back(itr->first);
+    }
+
+    return trainerIds;
+}
+
+void InitAvailableSpellsFiltered(Player* bot, bool allowPrimaryProfessionSpells)
+{
+    if (!bot)
+        return;
+
+    for (uint32 trainerId : GetTrainerIdsForClass(bot->getClass()))
+    {
+        Trainer::Trainer* trainer = sObjectMgr->GetTrainer(trainerId);
+        if (!trainer)
+            continue;
+
+        if (trainer->GetTrainerType() == Trainer::Type::Class && !trainer->IsTrainerValidForPlayer(bot))
+            continue;
+
+        for (auto const& spell : trainer->GetSpells())
+        {
+            Trainer::Spell const* trainerSpell = trainer->GetSpell(spell.SpellId);
+            if (!ShouldTeachTrainerSpell(bot, trainer, trainerSpell, allowPrimaryProfessionSpells))
+                continue;
+
+            if (trainerSpell->IsCastable())
+                bot->CastSpell(bot, trainerSpell->SpellId, true);
+            else
+                bot->learnSpell(trainerSpell->SpellId, false);
+        }
+    }
+}
+
+void LearnSecondaryProfessionRanks(Player* bot, uint16 skillId, uint16 targetMaxSkill)
+{
+    if (!bot)
+        return;
+
+    for (SecondaryProfessionRankSpell const& rankSpell : GetSecondaryProfessionRankSpells(skillId))
+    {
+        if (targetMaxSkill < rankSpell.requiredMaxSkill || bot->HasSpell(rankSpell.spellId))
+            continue;
+
+        bot->learnSpell(rankSpell.spellId, false);
+    }
+}
+
+void GrantSecondaryProfessions(Player* bot)
+{
+    if (!bot)
+        return;
+
+    uint16 const skillCap = ComputeLevelSkillCap(bot);
+
+    for (uint16 skillId : GetSecondaryProfessionSkillIds())
+    {
+        uint16 const currentValue = bot->GetPureSkillValue(skillId);
+        uint16 const currentMaxValue = bot->GetPureMaxSkillValue(skillId);
+        uint16 const targetValue = std::max(currentValue, skillCap);
+        uint16 const targetMaxValue = std::max(currentMaxValue, targetValue);
+        uint16 const step = GetSkillStepForValue(targetMaxValue);
+
+        bot->SetSkill(skillId, step, targetValue, targetMaxValue);
+        LearnSecondaryProfessionRanks(bot, skillId, targetMaxValue);
+    }
+}
+
+RidingStateSnapshot CaptureRidingState(Player* bot)
+{
+    RidingStateSnapshot snapshot;
+    if (!bot)
+        return snapshot;
+
+    snapshot.step = bot->GetSkillStep(SKILL_RIDING);
+    snapshot.value = bot->GetPureSkillValue(SKILL_RIDING);
+    snapshot.maxValue = bot->GetPureMaxSkillValue(SKILL_RIDING);
+    snapshot.hadSkill = bot->HasSkill(SKILL_RIDING) || snapshot.value != 0 || snapshot.maxValue != 0;
+
+    auto const& ridingRankSpellIds = GetRidingRankSpellIds();
+    for (size_t i = 0; i < ridingRankSpellIds.size(); ++i)
+        snapshot.knownRankSpells[i] = bot->HasSpell(ridingRankSpellIds[i]);
+
+    return snapshot;
+}
+
+void RestoreRidingState(Player* bot, RidingStateSnapshot const& snapshot)
+{
+    if (!bot)
+        return;
+
+    auto const& ridingRankSpellIds = GetRidingRankSpellIds();
+    for (size_t i = 0; i < ridingRankSpellIds.size(); ++i)
+    {
+        if (!snapshot.knownRankSpells[i] && bot->HasSpell(ridingRankSpellIds[i]))
+            bot->removeSpell(ridingRankSpellIds[i], SPEC_MASK_ALL, false);
+    }
+
+    for (size_t i = 0; i < ridingRankSpellIds.size(); ++i)
+    {
+        if (snapshot.knownRankSpells[i] && !bot->HasSpell(ridingRankSpellIds[i]))
+            bot->learnSpell(ridingRankSpellIds[i], false);
+    }
+
+    if (!snapshot.hadSkill)
+    {
+        if (bot->HasSkill(SKILL_RIDING) || bot->GetPureSkillValue(SKILL_RIDING) != 0 || bot->GetPureMaxSkillValue(SKILL_RIDING) != 0)
+            bot->SetSkill(SKILL_RIDING, 0, 0, 0);
+
+        return;
+    }
+
+    uint16 const restoredMaxValue = std::max(snapshot.maxValue, snapshot.value);
+    uint16 const restoredStep = snapshot.step ? snapshot.step : GetSkillStepForValue(restoredMaxValue);
+    bot->SetSkill(SKILL_RIDING, restoredStep, snapshot.value, restoredMaxValue);
+}
+
+bool IsPetTauntSpell(SpellInfo const* spellInfo)
+{
+    return spellInfo && (spellInfo->HasAura(SPELL_AURA_MOD_TAUNT) || spellInfo->HasEffect(SPELL_EFFECT_ATTACK_ME));
+}
+
+bool SetPetTankState(Player* bot, bool enabled)
+{
+    Pet* pet = bot ? bot->GetPet() : nullptr;
+    if (!pet)
+        return false;
+
+    bool foundTauntSpell = false;
+
+    for (PetSpellMap::const_iterator itr = pet->m_spells.begin(); itr != pet->m_spells.end(); ++itr)
+    {
+        if (itr->second.state == PETSPELL_REMOVED)
+            continue;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(itr->first);
+        if (!spellInfo || !spellInfo->IsAutocastable() || !IsPetTauntSpell(spellInfo))
+            continue;
+
+        foundTauntSpell = true;
+        bool const isAutoCast = std::find(pet->m_autospells.begin(), pet->m_autospells.end(), itr->first) != pet->m_autospells.end();
+        if (isAutoCast != enabled)
+            pet->ToggleAutocast(spellInfo, enabled);
+    }
+
+    return foundTauntSpell;
+}
+
 /* Spell pass aligned with existing playerbot setup flows. */
 
 void LearnSpellsForCurrentLevel(Player* bot)
@@ -2348,6 +2581,239 @@ void LearnSpellsForCurrentLevel(Player* bot)
     factory.InitAvailableSpells();
     LearnQuestClassSpells(bot);
     factory.InitSpecialSpells();
+}
+
+void LearnBotSpellsForCurrentLevel(Player* bot)
+{
+    if (!bot)
+        return;
+
+    PlayerbotFactory factory(bot, bot->GetLevel());
+    factory.InitClassSpells();
+    InitAvailableSpellsFiltered(bot, false);
+    LearnQuestClassSpells(bot);
+    factory.InitSpecialSpells();
+}
+
+void ApplyGlyphStateForCap(Player* bot, ExpansionCap cap)
+{
+    if (!bot)
+        return;
+
+    PlayerbotFactory factory(bot, bot->GetLevel());
+    if (cap == ExpansionCap::Wrath || !sPlayerbotAIConfig.limitTalentsExpansion)
+        factory.InitGlyphs(false);
+    else
+        ClearGlyphs(bot);
+}
+
+void ApplyClassBotGearAgainstMaster(Player* bot, Player* commandSender, ModuleConfig const& config)
+{
+    if (!bot || !commandSender || !IsAddclassBot(bot))
+        return;
+
+    bool const useMasterRatio = (config.gearModeRndBots == "masterilvlratio" || config.gearModeRndBots == "master_ilvl_ratio");
+    float const targetAverageIlvl = useMasterRatio ? ComputeMasterTargetAverageIlvl(commandSender, config.gearRatioRndBots) : 0.0f;
+    uint32 const gearScoreLimit = ComputeGearScoreLimitFromAverageIlvl(targetAverageIlvl);
+
+    if (useMasterRatio && targetAverageIlvl > 0.0f && gearScoreLimit != 0)
+    {
+        for (uint8 attempt = 0; attempt < config.gearRetryCount; ++attempt)
+        {
+            DestroyOldGear(bot);
+            RunGearPass(bot, gearScoreLimit, config.gearQualityCapRatioMode, targetAverageIlvl, config);
+
+            if (IsGearWithinTargetBand(bot, targetAverageIlvl, config))
+                return;
+        }
+    }
+
+    DestroyOldGear(bot);
+    RunGearPass(bot, 0, config.gearQualityCapTopForLevel);
+}
+
+bool ExecuteSetupCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI)
+{
+    if (!bot || !botAI)
+        return false;
+
+    SyncAddclassBotLevel(bot, commandSender);
+
+    PlayerbotFactory factory(bot, bot->GetLevel());
+    bool const isAltBot = botAI->IsAlt();
+    auto const shouldRun = [isAltBot](bool altGate) { return !isAltBot || altGate; };
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceAttunementQs))
+        factory.InitAttunementQuests();
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceBags))
+        factory.InitBags(false);
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceAmmo))
+        factory.InitAmmo();
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceFood))
+        factory.InitFood();
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceReagents))
+        factory.InitReagents();
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceConsumables))
+        factory.InitConsumables();
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenancePotions))
+        factory.InitPotions();
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceTalentTree))
+        factory.InitTalentsTree(true);
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenancePet))
+        factory.InitPet();
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenancePetTalents))
+        factory.InitPetTalents();
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceSkills))
+    {
+        Optional<RidingStateSnapshot> ridingSnapshot;
+        if (isAltBot)
+            ridingSnapshot = CaptureRidingState(bot);
+
+        factory.InitSkills();
+        if (ridingSnapshot)
+            RestoreRidingState(bot, ridingSnapshot.value());
+
+        GrantSecondaryProfessions(bot);
+    }
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceClassSpells))
+        factory.InitClassSpells();
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceAvailableSpells))
+        InitAvailableSpellsFiltered(bot, false);
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceReputation))
+        factory.InitReputation();
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceSpecialSpells))
+        factory.InitSpecialSpells();
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceMounts))
+        factory.InitMounts();
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceGlyphs))
+        factory.InitGlyphs(false);
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceKeyring))
+        factory.InitKeyring();
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceGemsEnchants) && bot->GetLevel() >= sPlayerbotAIConfig.minEnchantingBotLevel)
+        factory.ApplyEnchantAndGemsNew();
+
+    bot->DurabilityRepairAll(false, 1.0f, false);
+    bot->SendTalentsInfoData(false);
+    SetPetTankState(bot, false);
+    ResetBotAIAndActions(botAI);
+    return true;
+}
+
+bool ExecuteRestockCommand(Player* bot, PlayerbotAI* botAI)
+{
+    if (!bot || !botAI)
+        return false;
+
+    PlayerbotFactory factory(bot, bot->GetLevel());
+    bool const isAltBot = botAI->IsAlt();
+    auto const shouldRun = [isAltBot](bool altGate) { return !isAltBot || altGate; };
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceAmmo))
+        factory.InitAmmo();
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceFood))
+        factory.InitFood();
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceReagents))
+        factory.InitReagents();
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceConsumables))
+        factory.InitConsumables();
+
+    if (shouldRun(sPlayerbotAIConfig.altMaintenancePotions))
+        factory.InitPotions();
+
+    bot->DurabilityRepairAll(false, 1.0f, false);
+    return true;
+}
+
+bool ExecuteSpecCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI, ModuleConfig const& config,
+                        ParsedBotCommand const& command, std::string& errorMessage)
+{
+    if (!bot || !botAI)
+    {
+        errorMessage = "bot AI is not available.";
+        return false;
+    }
+
+    ResolvedSpec resolved;
+    if (!ResolveRequestedSpec(bot, command.specProfile, resolved, false) || !resolved.definition)
+    {
+        errorMessage = "invalid profile '" + command.specProfile + "' for " + bot->GetName() + ". " + BuildSpecListMessage(bot);
+        return false;
+    }
+
+    int specNo = FindSpecNoForDefinition(bot->getClass(), *resolved.definition);
+    if (specNo < 0)
+    {
+        errorMessage = "no matching premade template found for '" + FormatCanonicalName(resolved.definition->canonical) +
+                       "' on " + bot->GetName() + '.';
+        return false;
+    }
+
+    SyncAddclassBotLevel(bot, commandSender);
+
+    ExpansionCap const cap = ResolveExpansionCap(bot, commandSender, config);
+    if (!ApplySpecTalents(bot, specNo, cap))
+    {
+        errorMessage = "failed to apply spec for " + bot->GetName() + '.';
+        return false;
+    }
+
+    LearnBotSpellsForCurrentLevel(bot);
+    if (config.autoGearRndBots)
+        ApplyClassBotGearAgainstMaster(bot, commandSender, config);
+    ApplyGlyphStateForCap(bot, cap);
+
+    PlayerbotFactory factory(bot, bot->GetLevel());
+    if (bot->GetLevel() >= sPlayerbotAIConfig.minEnchantingBotLevel)
+        factory.ApplyEnchantAndGemsNew();
+
+    if (bot->getClass() == CLASS_HUNTER)
+    {
+        factory.InitPet();
+        factory.InitPetTalents();
+        SetPetTankState(bot, false);
+    }
+
+    bot->SendTalentsInfoData(false);
+    ResetBotAIAndActions(botAI);
+    return true;
+}
+
+bool ExecutePetTankCommand(Player* bot, bool enabled, std::string& errorMessage)
+{
+    if (!bot || !bot->GetPet())
+    {
+        errorMessage = "no active pet.";
+        return false;
+    }
+
+    if (!SetPetTankState(bot, enabled))
+    {
+        errorMessage = "no taunt-capable pet spells found.";
+        return false;
+    }
+
+    return true;
 }
 
 /* Reuse the same internals as chat commands "reset" and "reset botAI". */
@@ -2370,6 +2836,24 @@ struct CommandResult
     bool handled = false;
 };
 
+char const* GetCommandLabel(BotCommandType type)
+{
+    switch (type)
+    {
+        case BotCommandType::Setup:
+            return "setup";
+        case BotCommandType::Spec:
+            return "spec";
+        case BotCommandType::Restock:
+            return "restock";
+        case BotCommandType::PetTank:
+            return "pettank";
+        case BotCommandType::None:
+        default:
+            return "bettersetup";
+    }
+}
+
 bool CheckMasterControl(Player* commandSender, Player* bot, ModuleConfig const& config)
 {
     /* Config can disable ownership checks entirely for wide-open admin setups. */
@@ -2385,23 +2869,14 @@ bool CheckMasterControl(Player* commandSender, Player* bot, ModuleConfig const& 
     if (commandSender->GetSession()->GetSecurity() >= SEC_GAMEMASTER)
         return true;
 
-    /* Default path: only the owning master gets to rewire this bot's profession in life. */
+    /* Default path: only the owning master gets to command the bot. */
 
     PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
     return botAI && botAI->GetMaster() == commandSender;
 }
 
-/* Main per-bot pipeline:
- * 1) split/normalize chat command,
- * 2) apply selector filtering,
- * 3) resolve spec intent,
- * 4) apply talents + refresh + optional gear,
- * 5) report failures to master with context.
- * It reads long because it is a control tower, not because it forgot to stop.
- */
-
-bool ProcessSpecForBot(Player* commandSender, uint32 chatType, std::string const& originalMessage, Player* bot,
-                       ModuleConfig const& config, CommandResult& result)
+bool ProcessModuleCommandsForBot(Player* commandSender, uint32 chatType, std::string const& originalMessage, Player* bot,
+                                 ModuleConfig const& config, CommandResult& result)
 {
     PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
     if (!botAI)
@@ -2411,13 +2886,10 @@ bool ProcessSpecForBot(Player* commandSender, uint32 chatType, std::string const
         return false;
 
     std::vector<std::string> commands = SplitCommands(originalMessage, sPlayerbotAIConfig.commandSeparator);
-
     bool processedAny = false;
 
     for (std::string command : commands)
     {
-        /* Stage 1: trim and apply command prefix gate. */
-
         command = TrimCopy(command);
         if (command.empty())
             continue;
@@ -2427,100 +2899,78 @@ bool ProcessSpecForBot(Player* commandSender, uint32 chatType, std::string const
             if (!StartsWith(command, sPlayerbotAIConfig.commandPrefix))
                 continue;
 
-            command = command.substr(sPlayerbotAIConfig.commandPrefix.size());
-            command = TrimCopy(command);
-
+            command = TrimCopy(command.substr(sPlayerbotAIConfig.commandPrefix.size()));
             if (command.empty())
                 continue;
         }
 
-        /* Stage 2: run selector filters (@group2, @warrior, etc.) and parse actual command text. */
-
         std::string filtered = command;
         CompositeChatFilter selectorFilter(botAI);
-        filtered = selectorFilter.Filter(filtered);
-        filtered = TrimCopy(filtered);
-
+        filtered = TrimCopy(selectorFilter.Filter(filtered));
         if (filtered.empty())
             continue;
 
-        ParsedSpecCommand spec = ParseSpecCommand(filtered);
-        if (!spec.isSpecCommand)
+        ParsedBotCommand parsed = ParseBotCommand(filtered);
+        if (parsed.type == BotCommandType::None)
             continue;
-
-        /* Stage 3: mark command as handled/matched before policy checks. */
 
         processedAny = true;
         result.handled = true;
         result.matched++;
 
-        /* Stage 4: enforce master control rules and handle list-only requests. */
-
+        char const* label = GetCommandLabel(parsed.type);
         if (!CheckMasterControl(commandSender, bot, config))
         {
             result.failed++;
-            botAI->TellMasterNoFacing("spec: command rejected for " + bot->GetName() + " (master control required).");
+            botAI->TellMasterNoFacing(std::string(label) + ": command rejected for " + bot->GetName() + " (master control required).");
             continue;
         }
 
-        if (spec.listOnly)
+        if (parsed.listOnly)
         {
-            if (config.showSpecListOnEmpty)
+            if (parsed.type == BotCommandType::Spec && config.showSpecListOnEmpty)
                 botAI->TellMasterNoFacing(BuildSpecListMessage(bot));
 
             continue;
         }
 
-        if (!spec.errorMessage.empty())
+        if (!parsed.errorMessage.empty())
         {
             result.failed++;
-            botAI->TellMasterNoFacing("spec: " + spec.errorMessage);
+            botAI->TellMasterNoFacing(std::string(label) + ": " + parsed.errorMessage);
             continue;
         }
 
-        /* Stage 5: resolve requested profile and map it to a premade spec template index. */
+        std::string errorMessage;
+        bool success = false;
 
-        ResolvedSpec resolved;
-        if (!ResolveRequestedSpec(bot, spec.profile, resolved) || !resolved.definition)
+        switch (parsed.type)
         {
-            result.failed++;
-            botAI->TellMasterNoFacing("spec: invalid profile '" + spec.profile + "' for " + bot->GetName() + ". " + BuildSpecListMessage(bot));
-            continue;
+            case BotCommandType::Setup:
+                success = ExecuteSetupCommand(commandSender, bot, botAI);
+                break;
+            case BotCommandType::Spec:
+                success = ExecuteSpecCommand(commandSender, bot, botAI, config, parsed, errorMessage);
+                break;
+            case BotCommandType::Restock:
+                success = ExecuteRestockCommand(bot, botAI);
+                break;
+            case BotCommandType::PetTank:
+                success = ExecutePetTankCommand(bot, parsed.petTankEnabled, errorMessage);
+                break;
+            case BotCommandType::None:
+            default:
+                break;
         }
 
-        int specNo = FindSpecNoForDefinition(bot->getClass(), *resolved.definition);
-        if (specNo < 0)
+        if (!success)
         {
             result.failed++;
-            botAI->TellMasterNoFacing("spec: no matching premade template found for '" + FormatCanonicalName(resolved.definition->canonical) +
-                                      "' on " + bot->GetName() + '.');
+            if (errorMessage.empty())
+                errorMessage = "command failed for " + bot->GetName() + '.';
+            botAI->TellMasterNoFacing(std::string(label) + ": " + errorMessage);
             continue;
         }
-
-        /* Stage 6: apply workflow steps (level sync for addclass, talents, gear, spells, AI reset). */
-
-        SyncAddclassBotLevel(bot, commandSender);
-
-        ExpansionCap const cap = ResolveExpansionCap(bot, commandSender, config);
-
-        if (!ApplySpecTalents(bot, specNo, cap))
-        {
-            result.failed++;
-            botAI->TellMasterNoFacing("spec: failed to apply spec for " + bot->GetName() + '.');
-            continue;
-        }
-
-        RunPostSpecMaintenance(bot, cap);
-        LearnSpellsForCurrentLevel(bot);
-        if (spec.professions.first != 0 && spec.professions.second != 0)
-            ApplyRequestedPrimaryProfessions(bot, spec.professions);
-        NormalizeKnownSkillsToLevelCap(bot);
-        NormalizeRidingSkillForLevel(bot);
-
-        if (ShouldAutoGear(bot, spec.gearRequested, config))
-            ApplyAutoGear(bot, commandSender, config);
-
-        ResetBotAIAndActions(botAI);
 
         result.updated++;
     }
@@ -2660,14 +3110,8 @@ void ReportSummary(Player* commandSender, CommandResult const& result)
 
     ChatHandler handler(commandSender->GetSession());
 
-    if (result.matched == 0)
-    {
-        handler.SendSysMessage("spec: no bots matched the selectors.");
-        return;
-    }
-
     std::ostringstream out;
-    out << "spec: matched " << result.matched << ", updated " << result.updated << ", failed " << result.failed << '.';
+    out << "bettersetup: matched " << result.matched << ", updated " << result.updated << ", failed " << result.failed << '.';
     handler.SendSysMessage(out.str());
 }
 
@@ -2691,43 +3135,10 @@ void ProcessTargets(Player* commandSender, uint32 chatType, std::string const& m
         if (!bot)
             continue;
 
-        ProcessSpecForBot(commandSender, chatType, message, bot, config, result);
+        ProcessModuleCommandsForBot(commandSender, chatType, message, bot, config, result);
     }
 
     ReportSummary(commandSender, result);
-}
-
-/* Self-service test helper:
- * gears the player toward target average ilvl = character level.
- * We steer the factory cap using small feedback iterations.
- */
-
-void ApplyGearSelf(Player* player)
-{
-    uint32 const targetIlvl = player->GetLevel();
-    uint32 gearScoreLimit = PlayerbotFactory::CalcMixedGearScore(targetIlvl, ITEM_QUALITY_NORMAL);
-
-    for (uint8 attempt = 0; attempt < 6; ++attempt)
-    {
-        RunGearPass(player, gearScoreLimit, ITEM_QUALITY_LEGENDARY);
-
-        uint32 const currentIlvl = static_cast<uint32>(player->GetAverageItemLevelForDF());
-        if (currentIlvl == targetIlvl || currentIlvl == 0)
-            break;
-
-        float const scaled = static_cast<float>(gearScoreLimit) * static_cast<float>(targetIlvl) / static_cast<float>(currentIlvl);
-        uint32 nextLimit = static_cast<uint32>(scaled);
-
-        if (nextLimit == gearScoreLimit)
-        {
-            if (currentIlvl > targetIlvl && nextLimit > 1)
-                --nextLimit;
-            else if (currentIlvl < targetIlvl)
-                ++nextLimit;
-        }
-
-        gearScoreLimit = std::max<uint32>(1, nextLimit);
-    }
 }
 
 uint32 GetSpecPlayerTargetAverageIlvl(uint8 targetLevel, ModuleConfig const& config)
@@ -2778,57 +3189,6 @@ void ApplySpecPlayerGear(Player* player, uint8 targetLevel, ModuleConfig const& 
     }
 }
 
-/* Parse incoming chat, honor command prefix/separator, and execute gearself once
- * for each explicit appearance in the message.
- */
-
-void ProcessSelfCommands(Player* commandSender, std::string const& originalMessage)
-{
-    if (!commandSender || !commandSender->GetSession())
-        return;
-
-    ModuleConfig const config = LoadModuleConfig();
-    if (!config.enabled)
-        return;
-
-    std::vector<std::string> commands = SplitCommands(originalMessage, sPlayerbotAIConfig.commandSeparator);
-    for (std::string command : commands)
-    {
-        command = TrimCopy(command);
-        if (command.empty())
-            continue;
-
-        if (!sPlayerbotAIConfig.commandPrefix.empty())
-        {
-            if (!StartsWith(command, sPlayerbotAIConfig.commandPrefix))
-                continue;
-
-            command = command.substr(sPlayerbotAIConfig.commandPrefix.size());
-            command = TrimCopy(command);
-
-            if (command.empty())
-                continue;
-        }
-
-        if (!IsGearSelfCommand(command))
-            continue;
-
-        ChatHandler handler(commandSender->GetSession());
-        uint8 const currentSecurity = static_cast<uint8>(commandSender->GetSession()->GetSecurity());
-
-        if (currentSecurity < config.gearSelfMinSecurity)
-        {
-            handler.PSendSysMessage("gearself: account level {} required (current {}).",
-                                    uint32(config.gearSelfMinSecurity), uint32(currentSecurity));
-            continue;
-        }
-
-        ApplyGearSelf(commandSender);
-        uint32 const currentAvgIlvl = static_cast<uint32>(commandSender->GetAverageItemLevelForDF());
-        handler.PSendSysMessage("gearself: target average ilvl {} (from level), current average ilvl {}.",
-                                commandSender->GetLevel(), currentAvgIlvl);
-    }
-}
 
 bool ParseOfflineSpecPlayerData(std::string const& data, std::string& canonicalSpec, uint8& level, ProfessionPair& professions)
 {
@@ -3313,7 +3673,6 @@ public:
         if (!player)
             return true;
 
-        ProcessSelfCommands(player, msg);
         return true;
     }
 
@@ -3323,8 +3682,6 @@ public:
     {
         if (!player || !receiver)
             return true;
-
-        ProcessSelfCommands(player, msg);
 
         if (!GET_PLAYERBOT_AI(receiver))
             return true;
@@ -3340,8 +3697,6 @@ public:
         if (!player || !group)
             return true;
 
-        ProcessSelfCommands(player, msg);
-
         ProcessTargets(player, type, msg, CollectGroupBots(group));
         return true;
     }
@@ -3353,8 +3708,6 @@ public:
         if (!player || !guild || type != CHAT_MSG_GUILD)
             return true;
 
-        ProcessSelfCommands(player, msg);
-
         ProcessTargets(player, type, msg, CollectGuildBots(player));
         return true;
     }
@@ -3365,8 +3718,6 @@ public:
     {
         if (!player || !channel)
             return true;
-
-        ProcessSelfCommands(player, msg);
 
         ProcessTargets(player, type, msg, CollectChannelBots(player, channel));
         return true;

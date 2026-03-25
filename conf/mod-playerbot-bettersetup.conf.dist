@@ -8,15 +8,29 @@
 # mod-playerbot-bettersetup module
 ########################################
 #
-# Unified spec and specplayer workflows for mod-playerbots.
+# Split bot setup workflow for mod-playerbots.
+#
+# Bot chat commands:
+#   setup
+#   spec
+#   spec <spec>
+#   restock
+#   pettank <on|off>
+#
+# setup mirrors upstream maintenance order, skips primary-profession teaching,
+# and grants missing first aid, fishing, and cooking.
+#
+# spec with no arguments lists valid exact specs for the bot class.
+# spec <spec> applies talents, learns spells, refreshes glyphs and enchants,
+# refreshes hunter pet talents, and can gear addclass/classbots.
 #
 
 ########################################
-# General Spec Command
+# General Bot Commands
 ########################################
 #
 #    PlayerbotBetterSetup.Spec.Enable
-#        Description: Enables the unified spec command handling.
+#        Description: Enables the bot-side bettersetup command handling.
 #        Default:     0 - Disabled
 #                     1 - Enabled
 #
@@ -27,7 +41,7 @@
 #                     1 - Enabled
 #
 #    PlayerbotBetterSetup.Spec.ShowSpecListOnEmpty
-#        Description: If enabled, 'spec' with no args returns valid options.
+#        Description: If enabled, `spec` with no args returns valid exact specs.
 #        Default:     0 - Disabled
 #                     1 - Enabled
 #
@@ -37,18 +51,18 @@ PlayerbotBetterSetup.Spec.RequireMasterControl = 1
 PlayerbotBetterSetup.Spec.ShowSpecListOnEmpty = 1
 
 ########################################
-# Spec Autogear Policy
+# ClassBot Spec Gear
 ########################################
 #
 #    PlayerbotBetterSetup.Spec.AutoGearRndBots
-#        Description: Auto-gear rnd/addclass bots after 'spec'.
-#                     'gear' argument is not required for rnd/addclass bots.
+#        Description: If enabled, addclass/classbots are geared after
+#                     `spec <spec>`.
 #        Default:     0 - Disabled
 #                     1 - Enabled
 #
 #    PlayerbotBetterSetup.Spec.AutoGearAltBots
-#        Description: Allows altbot autogear, but only when command includes
-#                     'gear'.
+#        Description: Legacy compatibility key. Bot-side rework does not use
+#                     this for altbots.
 #        Default:     0 - Disabled
 #                     1 - Enabled
 #
@@ -67,14 +81,16 @@ PlayerbotBetterSetup.Spec.ShowSpecListOnEmpty = 1
 #
 #    PlayerbotBetterSetup.Spec.GearModeRndBots
 #    PlayerbotBetterSetup.Spec.GearModeAltBots
-#        Description: Gear mode after spec.
+#        Description: Gear mode used by addclass/classbot `spec <spec>` gear.
+#                     `GearModeAltBots` is kept for compatibility only.
 #        Allowed:     top_for_level, master_ilvl_ratio
 #        Default:     master_ilvl_ratio
 #
 #    PlayerbotBetterSetup.Spec.GearMasterIlvlRatioRndBots
 #    PlayerbotBetterSetup.Spec.GearMasterIlvlRatioAltBots
 #        Description: Ratio applied to commanding player's average item level
-#                     when GearMode* = master_ilvl_ratio.
+#                     when GearModeRndBots = master_ilvl_ratio.
+#                     `GearMasterIlvlRatioAltBots` is kept for compatibility.
 #                     If master ilvl context is invalid, falls back to
 #                     top_for_level.
 #        Default:     1.0
@@ -92,7 +108,7 @@ PlayerbotBetterSetup.Spec.ShowSpecListOnEmpty = 1
 #
 #    PlayerbotBetterSetup.Spec.GearQualityCapRatioMode
 #    PlayerbotBetterSetup.Spec.GearQualityCapTopForLevel
-#        Description: Item quality ceiling used by spec autogear passes.
+#        Description: Item quality ceiling used by addclass/classbot spec gear.
 #                     1 = normal, 2 = uncommon, 3 = rare, 4 = epic,
 #                     5 = legendary
 #        Default:     4 / 5
@@ -266,12 +282,5 @@ PlayerbotBetterSetup.SpecPlayer.GearLevelSearchWindow = 10
 #        Default:     0 - Disabled
 #                     1 - Enabled
 #
-#    PlayerbotBetterSetup.GearSelf.MinSecurityLevel
-#        Description: Minimum account level required to use `gearself`.
-#        Default:     2
-#                     0 = player, 1 = moderator, 2 = gamemaster,
-#                     3 = administrator
-#
 
 PlayerbotBetterSetup.LoginDiagnostics.Enable = 1
-PlayerbotBetterSetup.GearSelf.MinSecurityLevel = 2

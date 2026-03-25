@@ -1,5 +1,7 @@
 # `specplayer` GM Command Implementation Plan
 
+Historical note: this is a planning document for the deferred `.specplayer` follow-up. The current bot-side command split is documented in `module-rework.md` and the module `README.md`.
+
 Date: March 6, 2026  
 Status: Planning only (no code changes yet)  
 Module: `mod-playerbot-bettersetup`

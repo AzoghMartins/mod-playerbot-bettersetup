@@ -1,5 +1,7 @@
 # Unified `spec` Command Design (Draft v0.4)
 
+Historical note: this draft describes the earlier unified-command design. The active command-split rework is documented in `module-rework.md` and the module `README.md`.
+
 Date: February 24, 2026
 Status: Draft (discussion only, no code changes yet)
 Module: `mod-playerbot-bettersetup`
