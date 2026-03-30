@@ -13,16 +13,22 @@
 # Bot chat commands:
 #   setup
 #   spec
-#   spec <spec>
+#   spec <spec|role>
 #   restock
 #   pettank <on|off>
 #
 # setup mirrors upstream maintenance order, skips primary-profession teaching,
 # and grants missing first aid, fishing, and cooking.
 #
-# spec with no arguments lists valid exact specs for the bot class.
-# spec <spec> applies talents, learns spells, refreshes glyphs and enchants,
-# refreshes hunter pet talents, and can gear addclass/classbots.
+# setup uses PlayerbotBetterSetup.Spec.ExpansionSource directly for setup-side
+# talent/glyph restrictions and secondary profession caps:
+#   Vanilla -> 300
+#   TBC     -> 375
+#   Wrath   -> 450
+#
+# spec with no arguments lists valid specs and roles for the bot class.
+# spec <spec|role> applies talents, learns spells, refreshes glyphs and
+# enchants, refreshes hunter pet talents, and can gear addclass/classbots.
 #
 
 ########################################
@@ -41,7 +47,7 @@
 #                     1 - Enabled
 #
 #    PlayerbotBetterSetup.Spec.ShowSpecListOnEmpty
-#        Description: If enabled, `spec` with no args returns valid exact specs.
+#        Description: If enabled, `spec` with no args returns valid specs and roles.
 #        Default:     0 - Disabled
 #                     1 - Enabled
 #
@@ -56,7 +62,7 @@ PlayerbotBetterSetup.Spec.ShowSpecListOnEmpty = 1
 #
 #    PlayerbotBetterSetup.Spec.AutoGearRndBots
 #        Description: If enabled, addclass/classbots are geared after
-#                     `spec <spec>`.
+#                     `spec <spec|role>`.
 #        Default:     0 - Disabled
 #                     1 - Enabled
 #
@@ -81,7 +87,7 @@ PlayerbotBetterSetup.Spec.ShowSpecListOnEmpty = 1
 #
 #    PlayerbotBetterSetup.Spec.GearModeRndBots
 #    PlayerbotBetterSetup.Spec.GearModeAltBots
-#        Description: Gear mode used by addclass/classbot `spec <spec>` gear.
+#        Description: Gear mode used by addclass/classbot `spec <spec|role>` gear.
 #                     `GearModeAltBots` is kept for compatibility only.
 #        Allowed:     top_for_level, master_ilvl_ratio
 #        Default:     master_ilvl_ratio

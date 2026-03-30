@@ -21,6 +21,7 @@
 #include "Trainer.h"
 #include "World.h"
 
+#include "AiFactory.h"
 #include "ChatFilter.h"
 #include "PlayerbotAI.h"
 #include "PlayerbotAIConfig.h"
@@ -93,6 +94,7 @@ constexpr char const* CONF_SPECPLAYER_ENFORCE_UNIQUE_RING_TRINKET_PAIRS =
 constexpr char const* CONF_SPECPLAYER_GEAR_LEVEL_SEARCH_WINDOW = "PlayerbotBetterSetup.SpecPlayer.GearLevelSearchWindow";
 constexpr char const* CONF_LOGIN_DIAGNOSTICS_ENABLE = "PlayerbotBetterSetup.LoginDiagnostics.Enable";
 constexpr char const* OFFLINE_SPECPLAYER_SOURCE = "mod-playerbot-bettersetup-specplayer";
+constexpr char const* PET_TANK_SOURCE = "mod-playerbot-bettersetup-pettank";
 
 /* These helpers do the civil-service work:
  * players speak in accents, shortcuts, and optimism; code wants exact tokens.
@@ -492,6 +494,7 @@ bool ParseRequestedProfessions(std::string const& skill1Arg, std::string const& 
 void ApplyRequestedPrimaryProfessions(Player* target, ProfessionPair professions);
 void NormalizeKnownSkillsToLevelCap(Player* target);
 void ResetBotAIAndActions(PlayerbotAI* botAI);
+bool SetPetTankState(Player* bot, bool enabled);
 
 struct ModuleConfig
 {
@@ -984,7 +987,22 @@ std::string BuildSpecListMessageForClass(uint8 classId)
         exact << FormatCanonicalName(profile.specs[i].canonical);
     }
 
-    return "Available specs: " + exact.str() + '.';
+    std::ostringstream roles;
+    bool firstRole = true;
+    for (auto const& [roleName, _] : profile.roles)
+    {
+        if (!firstRole)
+            roles << ", ";
+
+        roles << roleName;
+        firstRole = false;
+    }
+
+    std::string message = "Available specs: " + exact.str() + '.';
+    if (!firstRole)
+        message += " Available roles: " + roles.str() + '.';
+
+    return message;
 }
 
 std::string BuildSpecListMessage(Player* bot)
@@ -1213,6 +1231,36 @@ ExpansionCap GetProgressionBasedCap(uint8 progressionTier)
     return ExpansionCap::Wrath;
 }
 
+ExpansionCap ResolveConfiguredExpansionCap(Player* bot, Player* commandSender, ModuleConfig const& config, bool widenLevelFloor)
+{
+    if (!bot)
+        return ExpansionCap::Wrath;
+
+    ExpansionCap const levelCap = GetLevelBasedCap(bot);
+    std::string const mode = config.expansionSource;
+
+    if (mode == "level")
+        return levelCap;
+
+    if (mode == "progression" || mode == "auto")
+    {
+        Player* progressionSource = commandSender ? commandSender : bot;
+        if (progressionSource)
+        {
+            uint8 progressionTier = 0;
+            if (TryGetProgressionTierFromSettings(progressionSource->GetGUID().GetCounter(), progressionTier))
+            {
+                ExpansionCap const progressionCap = GetProgressionBasedCap(progressionTier);
+                return widenLevelFloor ? GetWiderExpansionCap(levelCap, progressionCap) : progressionCap;
+            }
+        }
+
+        return levelCap;
+    }
+
+    return levelCap;
+}
+
 /* Decide which expansion cap to use for talent filtering.
  * If limitTalentsExpansion is disabled upstream, this always resolves to Wrath.
  * "auto" means progression tier first, then level if that data is missing.
@@ -1225,31 +1273,19 @@ ExpansionCap ResolveExpansionCap(Player* bot, Player* commandSender, ModuleConfi
     if (!sPlayerbotAIConfig.limitTalentsExpansion)
         return ExpansionCap::Wrath;
 
-    ExpansionCap const levelCap = GetLevelBasedCap(bot);
-    std::string const mode = config.expansionSource;
-
-    if (mode == "level")
-        return levelCap;
-
-    /* Progression may widen access for a later expansion realm state, but it should
-     * never narrow a character below the talent rows their current level already supports.
+    /* Spec/specplayer keep the original behavior: progression can widen access,
+     * but current level remains the minimum floor.
      */
+    return ResolveConfiguredExpansionCap(bot, commandSender, config, true);
+}
 
-    if (mode == "progression" || mode == "auto")
-    {
-        if (commandSender)
-        {
-            uint8 progressionTier = 0;
-            if (TryGetProgressionTierFromSettings(commandSender->GetGUID().GetCounter(), progressionTier))
-                return GetWiderExpansionCap(levelCap, GetProgressionBasedCap(progressionTier));
-        }
-
-        return levelCap;
-    }
-
-    /* Unknown mode values get the boring fallback so nobody gets paged at 3am. */
-
-    return levelCap;
+ExpansionCap ResolveSetupExpansionCap(Player* bot, Player* commandSender, ModuleConfig const& config)
+{
+    /* Setup should follow the configured expansion source directly so progression
+     * can actively restrict maintenance-era features such as talents, glyphs,
+     * and secondary profession caps.
+     */
+    return ResolveConfiguredExpansionCap(bot, commandSender, config, false);
 }
 
 /* Hard gate for talent nodes when expansion limiting is active.
@@ -1454,6 +1490,302 @@ bool ApplySpecTalents(Player* bot, int specNo, ExpansionCap cap)
     PlayerbotFactory::InitTalentsByParsedSpecLink(bot, filtered, true);
     FillRemainingTalentPoints(bot, parsedPath, cap);
     bot->SendTalentsInfoData(false);
+    return true;
+}
+
+uint32 EncodeTalentNodeKey(uint32 tab, uint32 row, uint32 col)
+{
+    return (tab << 16) | (row << 8) | col;
+}
+
+std::unordered_map<uint32, uint32> BuildCurrentTalentRanks(Player* bot)
+{
+    std::unordered_map<uint32, uint32> ranks;
+    if (!bot)
+        return ranks;
+
+    PlayerTalentMap const& talentMap = bot->GetTalentMap();
+    for (PlayerTalentMap::const_iterator itr = talentMap.begin(); itr != talentMap.end(); ++itr)
+    {
+        uint32 const spellId = itr->first;
+        if ((bot->GetActiveSpecMask() & itr->second->specMask) == 0)
+            continue;
+
+        TalentSpellPos const* talentPos = GetTalentSpellPos(spellId);
+        if (!talentPos)
+            continue;
+
+        TalentEntry const* talentInfo = sTalentStore.LookupEntry(talentPos->talent_id);
+        if (!talentInfo)
+            continue;
+
+        TalentTabEntry const* talentTabInfo = sTalentTabStore.LookupEntry(talentInfo->TalentTab);
+        if (!talentTabInfo)
+            continue;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+        uint32 const rank = spellInfo ? std::max<uint32>(1, spellInfo->GetRank()) : 1;
+        uint32 const key = EncodeTalentNodeKey(talentTabInfo->tabpage, talentInfo->Row, talentInfo->Col);
+
+        auto const [it, inserted] = ranks.try_emplace(key, rank);
+        if (!inserted)
+            it->second = std::max(it->second, rank);
+    }
+
+    return ranks;
+}
+
+std::unordered_map<uint32, uint32> BuildTemplateTalentRanks(Player* bot, int specNo)
+{
+    std::unordered_map<uint32, uint32> ranks;
+    if (!bot || specNo < 0)
+        return ranks;
+
+    for (std::vector<uint32> const& entry : BuildTemplatePath(bot, bot->getClass(), specNo))
+    {
+        if (entry.size() < 4)
+            continue;
+
+        uint32 const key = EncodeTalentNodeKey(entry[0], entry[1], entry[2]);
+        auto const [it, inserted] = ranks.try_emplace(key, entry[3]);
+        if (!inserted)
+            it->second = std::max(it->second, entry[3]);
+    }
+
+    return ranks;
+}
+
+int FindBestCurrentSpecNo(Player* bot)
+{
+    if (!bot)
+        return -1;
+
+    ClassSpecMap const& profiles = GetClassSpecProfiles();
+    auto const profileIt = profiles.find(bot->getClass());
+    if (profileIt == profiles.end())
+        return -1;
+
+    std::unordered_map<uint32, uint32> const currentRanks = BuildCurrentTalentRanks(bot);
+    if (currentRanks.empty())
+        return -1;
+
+    int bestSpecNo = -1;
+    uint32 bestScore = 0;
+    uint32 bestMatchedNodes = 0;
+
+    for (SpecDefinition const& spec : profileIt->second.specs)
+    {
+        int const specNo = FindSpecNoForDefinition(bot->getClass(), spec);
+        if (specNo < 0)
+            continue;
+
+        std::unordered_map<uint32, uint32> const templateRanks = BuildTemplateTalentRanks(bot, specNo);
+        if (templateRanks.empty())
+            continue;
+
+        uint32 score = 0;
+        uint32 matchedNodes = 0;
+
+        for (auto const& [nodeKey, currentRank] : currentRanks)
+        {
+            auto const templateIt = templateRanks.find(nodeKey);
+            if (templateIt == templateRanks.end())
+                continue;
+
+            ++matchedNodes;
+            score += std::min(currentRank, templateIt->second);
+            if (currentRank == templateIt->second)
+                ++score;
+        }
+
+        if (score > bestScore || (score == bestScore && matchedNodes > bestMatchedNodes))
+        {
+            bestSpecNo = specNo;
+            bestScore = score;
+            bestMatchedNodes = matchedNodes;
+        }
+    }
+
+    return bestScore == 0 ? -1 : bestSpecNo;
+}
+
+SpecDefinition const* FindSpecDefinitionForSpecNo(Player* bot, int specNo)
+{
+    if (!bot || specNo < 0)
+        return nullptr;
+
+    ClassSpecMap const& profiles = GetClassSpecProfiles();
+    auto const profileIt = profiles.find(bot->getClass());
+    if (profileIt == profiles.end())
+        return nullptr;
+
+    for (SpecDefinition const& spec : profileIt->second.specs)
+    {
+        if (FindSpecNoForDefinition(bot->getClass(), spec) == specNo)
+            return &spec;
+    }
+
+    return nullptr;
+}
+
+bool ResolveCurrentSpec(Player* bot, ResolvedSpec& resolved)
+{
+    if (!bot)
+        return false;
+
+    std::string const aiSpecName = AiFactory::GetPlayerSpecName(bot);
+    if (!aiSpecName.empty() && ResolveRequestedSpec(bot, aiSpecName, resolved, true) && resolved.definition)
+        return true;
+
+    int const specNo = FindBestCurrentSpecNo(bot);
+    resolved.definition = FindSpecDefinitionForSpecNo(bot, specNo);
+    return resolved.definition != nullptr;
+}
+
+void ReapplySetupTalentsForCap(Player* bot, ExpansionCap cap)
+{
+    if (!bot || bot->GetLevel() < 10)
+        return;
+
+    int const specNo = FindBestCurrentSpecNo(bot);
+    if (specNo < 0)
+        return;
+
+    ApplySpecTalents(bot, specNo, cap);
+}
+
+bool LoadPetTankPreference(Player* bot)
+{
+    if (!bot)
+        return false;
+
+    QueryResult result = CharacterDatabase.Query(
+        "SELECT data FROM character_settings WHERE guid = {} AND source = '{}' LIMIT 1",
+        bot->GetGUID().GetCounter(), PET_TANK_SOURCE);
+
+    if (!result)
+        return false;
+
+    std::string const data = ToLower(TrimCopy((*result)[0].Get<std::string>()));
+    return data == "1" || data == "on" || data == "true";
+}
+
+void SavePetTankPreference(Player* bot, bool enabled)
+{
+    if (!bot)
+        return;
+
+    if (!enabled)
+    {
+        CharacterDatabase.Execute(
+            "DELETE FROM character_settings WHERE guid = {} AND source = '{}'",
+            bot->GetGUID().GetCounter(), PET_TANK_SOURCE);
+        return;
+    }
+
+    CharacterDatabase.Execute(
+        "REPLACE INTO character_settings (guid, source, data) VALUES ({}, '{}', '{}')",
+        bot->GetGUID().GetCounter(), PET_TANK_SOURCE, "1");
+}
+
+struct WarlockPetChoice
+{
+    char const* strategy = "";
+    char const* summonAction = "";
+    uint32 summonSpellId = 0;
+    uint32 npcEntry = 0;
+};
+
+WarlockPetChoice GetWarlockPetChoice(std::string const& canonicalSpec, bool petTankEnabled)
+{
+    if (canonicalSpec == "demonology")
+        return { "felguard", "summon felguard", 30146, 17252 };
+
+    if (petTankEnabled)
+        return { "voidwalker", "summon voidwalker", 697, 1860 };
+
+    if (canonicalSpec == "destruction")
+        return { "imp", "summon imp", 688, 416 };
+
+    return { "felhunter", "summon felhunter", 691, 417 };
+}
+
+std::array<char const*, 5> const& GetWarlockPetStrategies()
+{
+    static std::array<char const*, 5> strategies = {
+        "imp",
+        "voidwalker",
+        "succubus",
+        "felhunter",
+        "felguard"
+    };
+
+    return strategies;
+}
+
+void ApplyWarlockPetStrategy(PlayerbotAI* botAI, char const* desiredStrategy)
+{
+    if (!botAI || !desiredStrategy || !*desiredStrategy)
+        return;
+
+    for (char const* strategy : GetWarlockPetStrategies())
+    {
+        if (std::string(strategy) == desiredStrategy)
+            continue;
+
+        if (botAI->HasStrategy(strategy, BOT_STATE_NON_COMBAT))
+            botAI->ChangeStrategy(std::string("-") + strategy, BOT_STATE_NON_COMBAT);
+    }
+
+    if (!botAI->HasStrategy(desiredStrategy, BOT_STATE_NON_COMBAT))
+        botAI->ChangeStrategy(std::string("+") + desiredStrategy, BOT_STATE_NON_COMBAT);
+}
+
+bool EnsureWarlockPet(Player* bot, PlayerbotAI* botAI, WarlockPetChoice const& choice)
+{
+    if (!bot || !botAI || !choice.summonSpellId || !choice.summonAction || !*choice.summonAction)
+        return false;
+
+    Pet* pet = bot->GetPet();
+    if (pet && pet->GetEntry() == choice.npcEntry)
+        return true;
+
+    if (!bot->HasSpell(choice.summonSpellId))
+        return false;
+
+    if (!botAI->DoSpecificAction(choice.summonAction, Event(), true))
+        return false;
+
+    pet = bot->GetPet();
+    return pet && pet->GetEntry() == choice.npcEntry;
+}
+
+bool ConfigureWarlockPetForPreference(Player* bot, PlayerbotAI* botAI, SpecDefinition const* specDefinition, bool petTankEnabled)
+{
+    if (!bot || !botAI || bot->getClass() != CLASS_WARLOCK || !specDefinition)
+        return false;
+
+    WarlockPetChoice const choice = GetWarlockPetChoice(specDefinition->canonical, petTankEnabled);
+    ApplyWarlockPetStrategy(botAI, choice.strategy);
+    EnsureWarlockPet(bot, botAI, choice);
+
+    Pet* pet = bot->GetPet();
+    if (pet && pet->GetEntry() == choice.npcEntry)
+    {
+        if (petTankEnabled)
+            SetPetTankState(bot, true);
+        else
+            SetPetTankState(bot, false);
+
+        return true;
+    }
+
+    if (petTankEnabled)
+        return false;
+
+    if (pet)
+        SetPetTankState(bot, false);
+
     return true;
 }
 
@@ -2469,12 +2801,26 @@ void LearnSecondaryProfessionRanks(Player* bot, uint16 skillId, uint16 targetMax
     }
 }
 
-void GrantSecondaryProfessions(Player* bot)
+uint16 GetSecondaryProfessionExpansionCap(ExpansionCap cap)
+{
+    switch (cap)
+    {
+        case ExpansionCap::Vanilla:
+            return 300;
+        case ExpansionCap::TBC:
+            return 375;
+        case ExpansionCap::Wrath:
+        default:
+            return 450;
+    }
+}
+
+void GrantSecondaryProfessions(Player* bot, ExpansionCap cap)
 {
     if (!bot)
         return;
 
-    uint16 const skillCap = ComputeLevelSkillCap(bot);
+    uint16 const skillCap = std::min<uint16>(ComputeLevelSkillCap(bot), GetSecondaryProfessionExpansionCap(cap));
 
     for (uint16 skillId : GetSecondaryProfessionSkillIds())
     {
@@ -2632,7 +2978,7 @@ void ApplyClassBotGearAgainstMaster(Player* bot, Player* commandSender, ModuleCo
     RunGearPass(bot, 0, config.gearQualityCapTopForLevel);
 }
 
-bool ExecuteSetupCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI)
+bool ExecuteSetupCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI, ModuleConfig const& config)
 {
     if (!bot || !botAI)
         return false;
@@ -2642,6 +2988,7 @@ bool ExecuteSetupCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI)
     PlayerbotFactory factory(bot, bot->GetLevel());
     bool const isAltBot = botAI->IsAlt();
     auto const shouldRun = [isAltBot](bool altGate) { return !isAltBot || altGate; };
+    ExpansionCap const setupCap = ResolveSetupExpansionCap(bot, commandSender, config);
 
     if (shouldRun(sPlayerbotAIConfig.altMaintenanceAttunementQs))
         factory.InitAttunementQuests();
@@ -2665,7 +3012,10 @@ bool ExecuteSetupCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI)
         factory.InitPotions();
 
     if (shouldRun(sPlayerbotAIConfig.altMaintenanceTalentTree))
+    {
         factory.InitTalentsTree(true);
+        ReapplySetupTalentsForCap(bot, setupCap);
+    }
 
     if (shouldRun(sPlayerbotAIConfig.altMaintenancePet))
         factory.InitPet();
@@ -2683,7 +3033,7 @@ bool ExecuteSetupCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI)
         if (ridingSnapshot)
             RestoreRidingState(bot, ridingSnapshot.value());
 
-        GrantSecondaryProfessions(bot);
+        GrantSecondaryProfessions(bot, setupCap);
     }
 
     if (shouldRun(sPlayerbotAIConfig.altMaintenanceClassSpells))
@@ -2702,7 +3052,7 @@ bool ExecuteSetupCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI)
         factory.InitMounts();
 
     if (shouldRun(sPlayerbotAIConfig.altMaintenanceGlyphs))
-        factory.InitGlyphs(false);
+        ApplyGlyphStateForCap(bot, setupCap);
 
     if (shouldRun(sPlayerbotAIConfig.altMaintenanceKeyring))
         factory.InitKeyring();
@@ -2712,8 +3062,18 @@ bool ExecuteSetupCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI)
 
     bot->DurabilityRepairAll(false, 1.0f, false);
     bot->SendTalentsInfoData(false);
-    SetPetTankState(bot, false);
+    SavePetTankPreference(bot, false);
     ResetBotAIAndActions(botAI);
+
+    if (bot->getClass() == CLASS_WARLOCK)
+    {
+        ResolvedSpec resolved;
+        if (ResolveCurrentSpec(bot, resolved) && resolved.definition)
+            ConfigureWarlockPetForPreference(bot, botAI, resolved.definition, false);
+    }
+    else
+        SetPetTankState(bot, false);
+
     return true;
 }
 
@@ -2755,7 +3115,7 @@ bool ExecuteSpecCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI, 
     }
 
     ResolvedSpec resolved;
-    if (!ResolveRequestedSpec(bot, command.specProfile, resolved, false) || !resolved.definition)
+    if (!ResolveRequestedSpec(bot, command.specProfile, resolved, true) || !resolved.definition)
     {
         errorMessage = "invalid profile '" + command.specProfile + "' for " + bot->GetName() + ". " + BuildSpecListMessage(bot);
         return false;
@@ -2791,17 +3151,56 @@ bool ExecuteSpecCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI, 
     {
         factory.InitPet();
         factory.InitPetTalents();
+        SavePetTankPreference(bot, false);
         SetPetTankState(bot, false);
     }
 
     bot->SendTalentsInfoData(false);
     ResetBotAIAndActions(botAI);
+
+    if (bot->getClass() == CLASS_WARLOCK)
+    {
+        bool const petTankEnabled = LoadPetTankPreference(bot);
+        if (!ConfigureWarlockPetForPreference(bot, botAI, resolved.definition, petTankEnabled))
+        {
+            errorMessage = "failed to configure warlock pet state for " + bot->GetName() + '.';
+            return false;
+        }
+    }
+
     return true;
 }
 
-bool ExecutePetTankCommand(Player* bot, bool enabled, std::string& errorMessage)
+bool ExecutePetTankCommand(Player* bot, PlayerbotAI* botAI, bool enabled, std::string& errorMessage)
 {
-    if (!bot || !bot->GetPet())
+    if (!bot || !botAI)
+    {
+        errorMessage = "bot AI is not available.";
+        return false;
+    }
+
+    if (bot->getClass() == CLASS_WARLOCK)
+    {
+        SavePetTankPreference(bot, enabled);
+
+        ResolvedSpec resolved;
+        if (!ResolveCurrentSpec(bot, resolved) || !resolved.definition)
+        {
+            errorMessage = "could not determine current warlock spec.";
+            return false;
+        }
+
+        if (!ConfigureWarlockPetForPreference(bot, botAI, resolved.definition, enabled))
+        {
+            errorMessage = enabled ? "failed to configure a tank pet for " + bot->GetName() + '.'
+                                   : "failed to configure a dps pet for " + bot->GetName() + '.';
+            return false;
+        }
+
+        return true;
+    }
+
+    if (!bot->GetPet())
     {
         errorMessage = "no active pet.";
         return false;
@@ -2947,7 +3346,7 @@ bool ProcessModuleCommandsForBot(Player* commandSender, uint32 chatType, std::st
         switch (parsed.type)
         {
             case BotCommandType::Setup:
-                success = ExecuteSetupCommand(commandSender, bot, botAI);
+                success = ExecuteSetupCommand(commandSender, bot, botAI, config);
                 break;
             case BotCommandType::Spec:
                 success = ExecuteSpecCommand(commandSender, bot, botAI, config, parsed, errorMessage);
@@ -2956,7 +3355,7 @@ bool ProcessModuleCommandsForBot(Player* commandSender, uint32 chatType, std::st
                 success = ExecuteRestockCommand(bot, botAI);
                 break;
             case BotCommandType::PetTank:
-                success = ExecutePetTankCommand(bot, parsed.petTankEnabled, errorMessage);
+                success = ExecutePetTankCommand(bot, botAI, parsed.petTankEnabled, errorMessage);
                 break;
             case BotCommandType::None:
             default:

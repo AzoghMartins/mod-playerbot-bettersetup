@@ -99,11 +99,12 @@ Notes:
 - Because only this module should change, `setup` likely needs one module-local secondary-skill helper after the upstream maintenance-shaped pass.
 - For alt bots, the safest design is to respect the existing upstream `AiPlayerbot.AltMaintenance*` gates instead of inventing a parallel config layer.
 
-### `spec <spec>`
+### `spec <spec|role>`
 
 Target behavior from the prompt:
 
 - Apply talents for the requested spec.
+- Allow role buckets such as `tank`, `dps`, and `heal`, picking a class-valid spec at random when the role has multiple choices.
 - Learn spells.
 - Apply enchants and glyphs.
 - Refresh hunter pet talents.
@@ -111,7 +112,7 @@ Target behavior from the prompt:
 
 Best reuse path:
 
-- Keep the current spec alias resolution and exact-spec mapping.
+- Keep the current spec alias resolution and class-role mapping.
 - Keep the current expansion-cap-aware `ApplySpecTalents(...)`.
 - Reuse `LearnSpellsForCurrentLevel(...)`.
 - Reuse upstream glyph application via `InitGlyphs(false)`.
@@ -122,7 +123,7 @@ Best reuse path:
 
 Recommended execution order:
 
-1. Resolve exact spec, or show the valid list when the user sends bare `spec`.
+1. Resolve exact spec or role bucket, or show the valid list when the user sends bare `spec`.
 2. Apply talents.
 3. Learn spells.
 4. If target is a ClassBot, apply master-ilvl gear.
@@ -165,6 +166,7 @@ Notes:
 Target behavior from the prompt:
 
 - Toggle pet taunt skills.
+- For warlocks, also control which demon should be active for the current spec.
 - Default should be off.
 
 Best reuse path:
@@ -172,7 +174,7 @@ Best reuse path:
 - Reuse the existing pet autocast mechanism from `mod-playerbots`:
   - `Pet::ToggleAutocast(...)`
   - existing pet-spell toggle helpers already used by bot AI
-- Add a module-local allowlist for taunt-capable pet spells rather than building a new generic pet command framework.
+- Add a module-local taunt detector for hunter and warlock pets rather than building a new generic pet command framework.
 
 Implementation note:
 
@@ -182,13 +184,14 @@ Implementation note:
   - `pettank off` disables autocast only for taunt spells.
   - It should not touch other pet autocast settings.
   - Default state should be off.
+  - For warlocks, the preferred demon should also follow the saved `pettank` state.
 
 ## What Should Change In This Module
 
 ### Target command set
 
 - `setup`
-- `spec <spec>`
+- `spec <spec|role>`
 - `restock`
 - `pettank <on/off>`
 
@@ -198,7 +201,7 @@ The new model should remove complexity from the current bot-side `spec` grammar:
 
 - Drop profession arguments from bot-side `spec`.
 - Drop the `gear` suffix from bot-side `spec`.
-- Prefer exact spec aliases over role-based random buckets for the new first pass.
+- Keep exact spec aliases and allow class-specific role buckets for `tank`, `dps`, `heal`, `melee`, and `ranged`.
 - Keep selector support (`@group2`, `@warrior`, etc.) because it is already useful and already implemented.
 
 This is a major usability win:
@@ -319,7 +322,7 @@ Helpers that should stop being bot-side `spec` concerns:
 
 1. Remove profession arguments from bot-side `spec`.
 2. Remove `gear` suffix parsing from bot-side `spec`.
-3. Remove role-random behavior from bot-side `spec` unless explicitly re-approved.
+3. Keep role-based spec buckets only if they stay class-correct and intentionally random within the bucket.
 4. Remove bot-side riding and all-skill normalization from `spec`.
 5. Remove partial post-spec maintenance that should now belong to `setup` or `restock`.
 
@@ -353,6 +356,9 @@ Notes:
   - `setup`
   - `spec`
   - `spec frost`
+  - `spec tank`
+  - `spec dps`
+  - `spec heal`
   - `restock`
   - `pettank on`
   - `pettank off`
@@ -369,7 +375,8 @@ Notes:
 - Pet classes:
   - hunter `spec` refreshes pet talents
   - hunter pet taunt toggles correctly
-  - warlock pet taunt toggles correctly if supported by the chosen allowlist
+  - warlock `pettank on` picks a tank demon and enables its taunt autocast
+  - warlock `pettank off` picks the spec-appropriate dps demon and disables taunt autocast
 
 ## Resolved Decisions
 
@@ -381,7 +388,7 @@ Notes:
   - set the target to level `60` or `70`
   - teach the chosen primary professions
   - run the new `setup`
-  - run the new `spec <spec>`
+  - run the new `spec <spec|role>`
   - then apply module-configured `.specplayer` gearing
 - `setup` should actively grant missing secondary professions instead of only normalizing already-known ones.
 
@@ -392,8 +399,8 @@ Build the rework around upstream maintenance semantics, not around the current `
 That gives the cleanest split:
 
 - `setup` = upstream maintenance-shaped full setup
-- `spec` = help/list on empty, otherwise exact spec change plus spell/glyph/enchant refresh, hunter pet talents, and classbot gear
+- `spec` = help/list on empty, otherwise exact spec or class-role change plus spell/glyph/enchant refresh, hunter pet talents, warlock pet preference reapply, and classbot gear
 - `restock` = consumables/ammo/reagents/repair only
-- `pettank` = taunt autocast toggle only
+- `pettank` = taunt autocast toggle, plus warlock tank-vs-dps demon preference
 
 Everything else in the current module should be treated as legacy or deferred scope unless it directly supports one of those four commands or the later `.specplayer` follow-up.
