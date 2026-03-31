@@ -15,7 +15,7 @@
 #   spec
 #   spec <spec|role>
 #   restock
-#   pettank <on|off>
+#   petspec <tank|dps|stealth|control>
 #
 # setup mirrors upstream maintenance order, skips primary-profession teaching,
 # and grants missing first aid, fishing, and cooking.
@@ -28,7 +28,12 @@
 #
 # spec with no arguments lists valid specs and roles for the bot class.
 # spec <spec|role> applies talents, learns spells, refreshes glyphs and
-# enchants, refreshes hunter pet talents, and can gear addclass/classbots.
+# enchants, reapplies saved hunter/warlock petspec choices, and can gear
+# addclass/classbots.
+#
+# petspec is the pet-role command for hunters and warlocks:
+#   tank, dps, stealth, control
+# The selected petspec is saved in character_settings and reused by setup/spec.
 #
 
 ########################################
@@ -78,11 +83,12 @@ PlayerbotBetterSetup.Spec.ShowSpecListOnEmpty = 1
 #        Allowed:     level, progression, auto
 #                     level       -> use level thresholds
 #                     progression -> use character_settings row for source
-#                                    'mod-individual-progression', but never
-#                                    below the target's own level bracket
+#                                    'mod-individual-progression' on the
+#                                    target bot/player; fallback to level if
+#                                    progression data is missing
 #                     auto        -> progression if present, else level;
-#                                    progression can widen the cap, but level
-#                                    remains the minimum floor
+#                                    uses the target bot/player progression
+#                                    row when present
 #        Default:     auto
 #
 #    PlayerbotBetterSetup.Spec.GearModeRndBots

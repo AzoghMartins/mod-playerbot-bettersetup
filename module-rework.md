@@ -31,7 +31,7 @@ The current bot-side `spec` flow is broader than a spec change:
 2. Resolve aliases and role-based random spec buckets.
 3. Enforce master-control policy.
 4. Sync addclass bot level to the master.
-5. Resolve expansion cap from level and optional progression state.
+5. Resolve expansion cap from the target bot/player progression state when present, with level as fallback only when progression data is missing.
 6. Apply talents through a custom filtered premade path.
 7. Run post-spec maintenance:
    - glyphs
@@ -161,30 +161,30 @@ Notes:
 - `restock` should not touch talents, bags, spells, glyphs, mounts, reputation, or gear generation.
 - This is a clean maintenance subset and should stay a clean maintenance subset.
 
-### `pettank <on/off>`
+### `petspec <tank|dps|stealth|control>`
 
 Target behavior from the prompt:
 
-- Toggle pet taunt skills.
-- For warlocks, also control which demon should be active for the current spec.
-- Default should be off.
+- Choose a pet role for hunters and warlocks.
+- For hunters, pick a suitable pet family, apply the matching pet talents, and control taunt autocast.
+- For warlocks, pick the matching demon for the requested role and control demon taunt autocast where applicable.
 
 Best reuse path:
 
 - Reuse the existing pet autocast mechanism from `mod-playerbots`:
   - `Pet::ToggleAutocast(...)`
   - existing pet-spell toggle helpers already used by bot AI
-- Add a module-local taunt detector for hunter and warlock pets rather than building a new generic pet command framework.
+- Reuse warlock summon strategies and summon actions from `mod-playerbots`.
+- Add a module-local hunter pet-family selector because upstream hunter pet init is random-family oriented.
 
 Implementation note:
 
-- The allowlist needs to be confirmed during implementation for the supported pet families and demon pets.
-- This command should be narrow:
-  - `pettank on` enables autocast only for taunt spells.
-  - `pettank off` disables autocast only for taunt spells.
-  - It should not touch other pet autocast settings.
-  - Default state should be off.
-  - For warlocks, the preferred demon should also follow the saved `pettank` state.
+- This command should stay narrow:
+  - `petspec tank` = tank pet or demon, taunt autocast on when applicable
+  - `petspec dps` = damage pet or demon, taunt autocast off
+  - `petspec stealth` = stealth-oriented pet or demon choice, taunt autocast off
+  - `petspec control` = control-oriented pet or demon choice, taunt autocast off
+  - the chosen petspec should be saved and reused by `setup` and `spec`
 
 ## What Should Change In This Module
 
@@ -193,7 +193,7 @@ Implementation note:
 - `setup`
 - `spec <spec|role>`
 - `restock`
-- `pettank <on/off>`
+- `petspec <tank|dps|stealth|control>`
 
 ### Command syntax simplification
 
@@ -210,7 +210,7 @@ This is a major usability win:
 - `spec` with no arguments remains a help/list command showing valid specs for the bot class.
 - `setup` becomes the full setup command.
 - `restock` becomes the consumable/repair command.
-- `pettank` becomes the pet threat control command.
+- `petspec` becomes the pet role command.
 
 ## Problem Areas In The Current Module
 
@@ -268,7 +268,7 @@ Split the current monolith into four command handlers plus shared helpers:
 - `HandleSetupCommand(...)`
 - `HandleSpecCommand(...)`
 - `HandleRestockCommand(...)`
-- `HandlePetTankCommand(...)`
+- `HandlePetSpecCommand(...)`
 
 Shared helpers that are still worth keeping:
 
@@ -294,9 +294,9 @@ Helpers that should stop being bot-side `spec` concerns:
 3. Define the new parser around four commands only:
    - `setup`
    - `spec`
-   - `spec <spec>`
+   - `spec <spec|role>`
    - `restock`
-   - `pettank <on/off>`
+   - `petspec <tank|dps|stealth|control>`
 4. Keep existing selector and summary infrastructure.
 
 ### Phase 2: Rebuild the behavior around upstream reuse
@@ -313,10 +313,11 @@ Helpers that should stop being bot-side `spec` concerns:
    - spells
    - glyphs
    - enchants
-   - hunter pet talents
+   - hunter pet refresh
+   - saved pet role reapply
    - classbot-only gear
    - AI reset
-5. Implement `pettank` around pet taunt autocast toggling.
+5. Implement `petspec` around hunter and warlock pet-role selection.
 
 ### Phase 3: Remove old `spec` baggage
 
@@ -360,11 +361,12 @@ Notes:
   - `spec dps`
   - `spec heal`
   - `restock`
-  - `pettank on`
-  - `pettank off`
+  - `petspec`
+  - `petspec tank`
+  - `petspec control`
 - Group selector path:
   - `@group2 @hunter restock`
-  - `@group2 @hunter pettank off`
+  - `@group2 @hunter petspec stealth`
   - `@group2 @warrior spec fury`
 - Alt bot path:
   - confirm `setup` respects upstream alt-maintenance gates
@@ -374,9 +376,10 @@ Notes:
   - confirm enchants are applied after final gear is equipped
 - Pet classes:
   - hunter `spec` refreshes pet talents
-  - hunter pet taunt toggles correctly
-  - warlock `pettank on` picks a tank demon and enables its taunt autocast
-  - warlock `pettank off` picks the spec-appropriate dps demon and disables taunt autocast
+  - hunter `petspec tank` creates a tenacity pet with taunt autocast on
+  - hunter `petspec dps/stealth/control` creates the expected family or family-type fallback with taunt autocast off
+  - warlock `petspec tank` picks a tank demon and enables its taunt autocast
+  - warlock `petspec dps/stealth/control` picks the expected demon fallback chain and keeps taunt autocast off
 
 ## Resolved Decisions
 
@@ -401,6 +404,6 @@ That gives the cleanest split:
 - `setup` = upstream maintenance-shaped full setup
 - `spec` = help/list on empty, otherwise exact spec or class-role change plus spell/glyph/enchant refresh, hunter pet talents, warlock pet preference reapply, and classbot gear
 - `restock` = consumables/ammo/reagents/repair only
-- `pettank` = taunt autocast toggle, plus warlock tank-vs-dps demon preference
+- `petspec` = hunter and warlock pet-role command, including taunt-autocast control
 
 Everything else in the current module should be treated as legacy or deferred scope unless it directly supports one of those four commands or the later `.specplayer` follow-up.
