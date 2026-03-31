@@ -3075,6 +3075,7 @@ void RunGearPass(Player* bot, uint32 gearScoreLimit, uint32 qualityLimit, float 
 {
     RunGearPass(bot, gearScoreLimit, qualityLimit);
     EnforceTargetItemLevelBand(bot, gearScoreLimit, qualityLimit, targetAverageIlvl, config);
+    PlayerbotFactory(bot, bot->GetLevel(), qualityLimit, gearScoreLimit).InitAmmo();
 }
 
 void RunGearPass(Player* bot, uint32 gearScoreLimit, uint32 qualityLimit, float targetAverageIlvl, ModuleConfig const& config,
@@ -3083,6 +3084,7 @@ void RunGearPass(Player* bot, uint32 gearScoreLimit, uint32 qualityLimit, float 
     RunGearPass(bot, gearScoreLimit, qualityLimit);
     EnforceTargetItemLevelBand(bot, gearScoreLimit, qualityLimit, targetAverageIlvl, config, applySpecPlayerRestrictions,
                                levelSearchWindow);
+    PlayerbotFactory(bot, bot->GetLevel(), qualityLimit, gearScoreLimit).InitAmmo();
 }
 
 /* Build a readable target-ilvl label from mode/ratio policy.
