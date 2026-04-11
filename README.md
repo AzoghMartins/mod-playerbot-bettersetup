@@ -51,7 +51,9 @@ Secondary-profession caps granted by `setup` are expansion-gated:
 
 For addclass/classbots, `setup` also syncs the bot level to the commanding player before running the setup pass.
 
-For hunters, `setup` preserves the current active pet and reapplies its talents and taunt state. It only creates a new hunter pet when no active pet exists and a saved `petspec` needs to be materialized.
+For hunters with a saved `petspec`, `setup` preserves the current active pet when it already matches that petspec, reapplies its talents and taunt state, and only swaps or creates a pet when the current one does not fit.
+
+For paladins, `setup` removes `Righteous Fury` when the current spec is not protection.
 
 ### `spec`
 
@@ -65,6 +67,7 @@ For hunters, `setup` preserves the current active pet and reapplies its talents 
 - applies glyphs
 - applies enchants and gems
 - reapplies saved hunter and warlock pet preferences after the spec change
+- removes `Righteous Fury` from non-protection paladins after the spec change
 - resets bot AI
 
 Notes:

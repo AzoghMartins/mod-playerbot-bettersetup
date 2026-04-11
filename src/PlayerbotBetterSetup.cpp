@@ -95,6 +95,8 @@ constexpr char const* CONF_SPECPLAYER_GEAR_LEVEL_SEARCH_WINDOW = "PlayerbotBette
 constexpr char const* CONF_LOGIN_DIAGNOSTICS_ENABLE = "PlayerbotBetterSetup.LoginDiagnostics.Enable";
 constexpr char const* OFFLINE_SPECPLAYER_SOURCE = "mod-playerbot-bettersetup-specplayer";
 constexpr char const* PET_SPEC_SOURCE = "mod-playerbot-bettersetup-petspec";
+constexpr uint32 SPELL_RIGHTEOUS_FURY = 25780;
+constexpr uint32 SPELL_RIGHTEOUS_FURY_THREAT_PASSIVE = 57340;
 
 /* These helpers do the civil-service work:
  * players speak in accents, shortcuts, and optimism; code wants exact tokens.
@@ -1687,6 +1689,29 @@ bool ResolveCurrentSpec(Player* bot, ResolvedSpec& resolved)
     int const specNo = FindBestCurrentSpecNo(bot);
     resolved.definition = FindSpecDefinitionForSpecNo(bot, specNo);
     return resolved.definition != nullptr;
+}
+
+bool IsProtectionPaladinSpec(SpecDefinition const* definition)
+{
+    return definition && NormalizeToken(definition->canonical) == "protection";
+}
+
+void NormalizePaladinRighteousFury(Player* bot, PlayerbotAI* botAI, SpecDefinition const* definition)
+{
+    if (!bot || bot->getClass() != CLASS_PALADIN || IsProtectionPaladinSpec(definition))
+        return;
+
+    bot->RemoveAurasDueToSpell(SPELL_RIGHTEOUS_FURY);
+    bot->RemoveAurasDueToSpell(SPELL_RIGHTEOUS_FURY_THREAT_PASSIVE);
+
+    if (!botAI)
+        return;
+
+    if (botAI->HasStrategy("bthreat", BOT_STATE_COMBAT))
+        botAI->ChangeStrategy("-bthreat", BOT_STATE_COMBAT);
+
+    if (botAI->HasStrategy("bthreat", BOT_STATE_NON_COMBAT))
+        botAI->ChangeStrategy("-bthreat", BOT_STATE_NON_COMBAT);
 }
 
 void ReapplySetupTalentsForCap(Player* bot, ExpansionCap cap)
@@ -3582,6 +3607,8 @@ bool ExecuteSetupCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI,
     bool const isAltBot = botAI->IsAlt();
     auto const shouldRun = [isAltBot](bool altGate) { return !isAltBot || altGate; };
     ExpansionCap const setupCap = ResolveSetupExpansionCap(bot, config);
+    Optional<PetSpecChoice> const savedPetSpec = LoadSavedPetSpec(bot);
+    bool const useSavedHunterPetSpec = bot->getClass() == CLASS_HUNTER && savedPetSpec && bot->GetLevel() >= 10;
 
     if (shouldRun(sPlayerbotAIConfig.altMaintenanceAttunementQs))
         factory.InitAttunementQuests();
@@ -3610,10 +3637,10 @@ bool ExecuteSetupCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI,
         ReapplySetupTalentsForCap(bot, setupCap);
     }
 
-    if (shouldRun(sPlayerbotAIConfig.altMaintenancePet))
+    if (shouldRun(sPlayerbotAIConfig.altMaintenancePet) && !useSavedHunterPetSpec)
         factory.InitPet();
 
-    if (shouldRun(sPlayerbotAIConfig.altMaintenancePetTalents))
+    if (shouldRun(sPlayerbotAIConfig.altMaintenancePetTalents) && !useSavedHunterPetSpec)
         factory.InitPetTalents();
 
     if (shouldRun(sPlayerbotAIConfig.altMaintenanceSkills))
@@ -3657,16 +3684,22 @@ bool ExecuteSetupCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI,
     bot->SendTalentsInfoData(false);
     ResetBotAIAndActions(botAI);
 
+    if (bot->getClass() == CLASS_PALADIN)
+    {
+        ResolvedSpec resolved;
+        if (ResolveCurrentSpec(bot, resolved))
+            NormalizePaladinRighteousFury(bot, botAI, resolved.definition);
+    }
+
     if (bot->getClass() == CLASS_HUNTER)
     {
-        Optional<PetSpecChoice> savedPetSpec = LoadSavedPetSpec(bot);
-        if (bot->GetPet())
+        if (savedPetSpec && bot->GetLevel() >= 10)
         {
-            bool const enableTaunt = savedPetSpec && savedPetSpec.value() == PetSpecChoice::Tank;
-            SetPetTankState(bot, enableTaunt);
+            if (!ConfigureHunterPetSpec(bot, savedPetSpec.value(), botAI->IsAlt(), errorMessage))
+                return false;
         }
-        else if (savedPetSpec && bot->GetLevel() >= 10 && !ConfigureHunterPetSpec(bot, savedPetSpec.value(), botAI->IsAlt(), errorMessage))
-            return false;
+        else if (bot->GetPet())
+            SetPetTankState(bot, false);
     }
     else if (bot->getClass() == CLASS_WARLOCK)
     {
@@ -3769,6 +3802,9 @@ bool ExecuteSpecCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI, 
 
     bot->SendTalentsInfoData(false);
     ResetBotAIAndActions(botAI);
+
+    if (bot->getClass() == CLASS_PALADIN)
+        NormalizePaladinRighteousFury(bot, botAI, resolved.definition);
 
     if (bot->getClass() == CLASS_HUNTER && savedPetSpec && bot->GetLevel() >= 10)
     {
