@@ -3498,6 +3498,24 @@ void RestoreRidingState(Player* bot, RidingStateSnapshot const& snapshot)
     bot->SetSkill(SKILL_RIDING, restoredStep, snapshot.value, restoredMaxValue);
 }
 
+struct RidingStateGuard
+{
+    explicit RidingStateGuard(Player* target, bool enabled) : bot(target)
+    {
+        if (enabled && bot)
+            snapshot = CaptureRidingState(bot);
+    }
+
+    ~RidingStateGuard()
+    {
+        if (bot && snapshot)
+            RestoreRidingState(bot, snapshot.value());
+    }
+
+    Player* bot = nullptr;
+    Optional<RidingStateSnapshot> snapshot;
+};
+
 bool IsPetTauntSpell(SpellInfo const* spellInfo)
 {
     return spellInfo && (spellInfo->HasAura(SPELL_AURA_MOD_TAUNT) || spellInfo->HasEffect(SPELL_EFFECT_ATTACK_ME));
@@ -3605,6 +3623,7 @@ bool ExecuteSetupCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI,
 
     PlayerbotFactory factory(bot, bot->GetLevel());
     bool const isAltBot = botAI->IsAlt();
+    RidingStateGuard const ridingGuard(bot, isAltBot);
     auto const shouldRun = [isAltBot](bool altGate) { return !isAltBot || altGate; };
     ExpansionCap const setupCap = ResolveSetupExpansionCap(bot, config);
     Optional<PetSpecChoice> const savedPetSpec = LoadSavedPetSpec(bot);
@@ -3645,14 +3664,7 @@ bool ExecuteSetupCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI,
 
     if (shouldRun(sPlayerbotAIConfig.altMaintenanceSkills))
     {
-        Optional<RidingStateSnapshot> ridingSnapshot;
-        if (isAltBot)
-            ridingSnapshot = CaptureRidingState(bot);
-
         factory.InitSkills();
-        if (ridingSnapshot)
-            RestoreRidingState(bot, ridingSnapshot.value());
-
         GrantSecondaryProfessions(bot, setupCap);
     }
 
@@ -3773,6 +3785,7 @@ bool ExecuteSpecCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI, 
 
     SyncAddclassBotLevel(bot, commandSender);
 
+    RidingStateGuard const ridingGuard(bot, botAI->IsAlt());
     ExpansionCap const cap = ResolveExpansionCap(bot, config);
     if (!ApplySpecTalents(bot, specNo, cap))
     {
