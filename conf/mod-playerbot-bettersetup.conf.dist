@@ -14,6 +14,8 @@
 #   setup
 #   spec
 #   spec <spec|role>
+#   spec manual <on|off>
+#   spec switch [1|2]
 #   restock
 #   petspec <tank|dps|stealth|control>
 #

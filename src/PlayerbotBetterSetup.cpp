@@ -95,8 +95,20 @@ constexpr char const* CONF_SPECPLAYER_GEAR_LEVEL_SEARCH_WINDOW = "PlayerbotBette
 constexpr char const* CONF_LOGIN_DIAGNOSTICS_ENABLE = "PlayerbotBetterSetup.LoginDiagnostics.Enable";
 constexpr char const* OFFLINE_SPECPLAYER_SOURCE = "mod-playerbot-bettersetup-specplayer";
 constexpr char const* PET_SPEC_SOURCE = "mod-playerbot-bettersetup-petspec";
+constexpr char const* MANUAL_SPEC_SOURCE = "mod-playerbot-bettersetup-manualspec";
 constexpr uint32 SPELL_RIGHTEOUS_FURY = 25780;
 constexpr uint32 SPELL_RIGHTEOUS_FURY_THREAT_PASSIVE = 57340;
+constexpr uint32 SPELL_APPRENTICE_RIDING = 33388;
+constexpr uint32 SPELL_JOURNEYMAN_RIDING = 33391;
+constexpr uint32 SPELL_EXPERT_RIDING = 34090;
+constexpr uint32 SPELL_ARTISAN_RIDING = 34091;
+constexpr uint32 SPELL_SUMMON_DREADSTEED = 23161;
+constexpr uint32 SPELL_SUMMON_CHARGER = 23214;
+constexpr uint32 SPELL_SUMMON_BLOOD_ELF_CHARGER = 34767;
+constexpr uint8 SETUP_APPRENTICE_RIDING_LEVEL = 40;
+constexpr uint8 SETUP_EXPERT_RIDING_LEVEL = 68;
+constexpr uint16 RIDING_APPRENTICE_SKILL = 75;
+constexpr uint16 RIDING_EXPERT_SKILL = 225;
 
 /* These helpers do the civil-service work:
  * players speak in accents, shortcuts, and optimism; code wants exact tokens.
@@ -269,13 +281,24 @@ std::array<SecondaryProfessionRankSpell, 6> const& GetSecondaryProfessionRankSpe
 std::array<uint32, 4> const& GetRidingRankSpellIds()
 {
     static std::array<uint32, 4> ridingRankSpellIds = {
-        33388,
-        33391,
-        34090,
-        34091
+        SPELL_APPRENTICE_RIDING,
+        SPELL_JOURNEYMAN_RIDING,
+        SPELL_EXPERT_RIDING,
+        SPELL_ARTISAN_RIDING
     };
 
     return ridingRankSpellIds;
+}
+
+std::array<uint32, 3> const& GetEpicClassMountSpellIds()
+{
+    static std::array<uint32, 3> epicClassMountSpellIds = {
+        SPELL_SUMMON_DREADSTEED,
+        SPELL_SUMMON_CHARGER,
+        SPELL_SUMMON_BLOOD_ELF_CHARGER
+    };
+
+    return epicClassMountSpellIds;
 }
 
 struct RidingStateSnapshot
@@ -286,6 +309,93 @@ struct RidingStateSnapshot
     uint16 maxValue = 0;
     std::array<bool, 4> knownRankSpells = {};
 };
+
+using EpicClassMountSpellSnapshot = std::array<bool, 3>;
+
+bool IsBlockedEpicClassMountSpell(Player* bot, uint32 spellId)
+{
+    if (!bot)
+        return false;
+
+    switch (bot->getClass())
+    {
+        case CLASS_PALADIN:
+            return spellId == SPELL_SUMMON_CHARGER || spellId == SPELL_SUMMON_BLOOD_ELF_CHARGER;
+        case CLASS_WARLOCK:
+            return spellId == SPELL_SUMMON_DREADSTEED;
+        default:
+            return false;
+    }
+}
+
+bool SpellTeachesBlockedEpicClassMountSpell(Player* bot, uint32 spellId)
+{
+    if (!bot || !spellId)
+        return false;
+
+    if (IsBlockedEpicClassMountSpell(bot, spellId))
+        return true;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!spellInfo)
+        return false;
+
+    for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+    {
+        if (!effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) || !effect.TriggerSpell)
+            continue;
+
+        if (IsBlockedEpicClassMountSpell(bot, effect.TriggerSpell))
+            return true;
+    }
+
+    return false;
+}
+
+bool QuestRewardsBlockedEpicClassMountSpell(Player* bot, Quest const* quest)
+{
+    if (!bot || !quest)
+        return false;
+
+    int32 const rewardCastSpell = quest->GetRewSpellCast();
+    if (rewardCastSpell > 0 && SpellTeachesBlockedEpicClassMountSpell(bot, static_cast<uint32>(rewardCastSpell)))
+        return true;
+
+    uint32 const rewardDisplaySpell = quest->GetRewSpell();
+    return rewardDisplaySpell && SpellTeachesBlockedEpicClassMountSpell(bot, rewardDisplaySpell);
+}
+
+EpicClassMountSpellSnapshot CaptureEpicClassMountSpellState(Player* bot)
+{
+    EpicClassMountSpellSnapshot snapshot = {};
+    if (!bot)
+        return snapshot;
+
+    auto const& spellIds = GetEpicClassMountSpellIds();
+    for (size_t i = 0; i < spellIds.size(); ++i)
+        snapshot[i] = bot->HasSpell(spellIds[i]);
+
+    return snapshot;
+}
+
+bool RemoveNewlyGrantedEpicClassMountSpells(Player* bot, EpicClassMountSpellSnapshot const& snapshot)
+{
+    if (!bot)
+        return false;
+
+    bool removed = false;
+    auto const& spellIds = GetEpicClassMountSpellIds();
+    for (size_t i = 0; i < spellIds.size(); ++i)
+    {
+        if (snapshot[i] || !IsBlockedEpicClassMountSpell(bot, spellIds[i]) || !bot->HasSpell(spellIds[i]))
+            continue;
+
+        bot->removeSpell(spellIds[i], SPEC_MASK_ALL, false);
+        removed = true;
+    }
+
+    return removed;
+}
 
 bool IsPrimaryProfessionSkillId(uint32 skillId)
 {
@@ -435,11 +545,11 @@ void RemoveLevel60EpicClassMountSpellsForSpecPlayer(Player* target)
     switch (target->getClass())
     {
         case CLASS_PALADIN:
-            target->removeSpell(23214, SPEC_MASK_ALL, false);
-            target->removeSpell(34767, SPEC_MASK_ALL, false);
+            target->removeSpell(SPELL_SUMMON_CHARGER, SPEC_MASK_ALL, false);
+            target->removeSpell(SPELL_SUMMON_BLOOD_ELF_CHARGER, SPEC_MASK_ALL, false);
             break;
         case CLASS_WARLOCK:
-            target->removeSpell(23161, SPEC_MASK_ALL, false);
+            target->removeSpell(SPELL_SUMMON_DREADSTEED, SPEC_MASK_ALL, false);
             break;
         default:
             break;
@@ -1095,11 +1205,22 @@ enum class BotCommandType
     PetSpec
 };
 
+enum class SpecControlAction
+{
+    None,
+    ManualOn,
+    ManualOff,
+    SwitchToggle,
+    SwitchPrimary,
+    SwitchSecondary
+};
+
 struct ParsedBotCommand
 {
     BotCommandType type = BotCommandType::None;
     bool listOnly = false;
     PetSpecChoice petSpecChoice = PetSpecChoice::None;
+    SpecControlAction specControlAction = SpecControlAction::None;
     std::string specProfile;
     std::string errorMessage;
 };
@@ -1152,6 +1273,55 @@ ParsedBotCommand ParseBotCommand(std::string const& command)
     if (words.size() == 1)
     {
         parsed.listOnly = true;
+        return parsed;
+    }
+
+    if (NormalizeToken(words[1]) == "manual")
+    {
+        if (words.size() != 3)
+        {
+            parsed.errorMessage = "usage: spec manual <on|off>.";
+            return parsed;
+        }
+
+        std::string const mode = NormalizeToken(words[2]);
+        if (mode == "on")
+        {
+            parsed.specControlAction = SpecControlAction::ManualOn;
+            return parsed;
+        }
+
+        if (mode == "off")
+        {
+            parsed.specControlAction = SpecControlAction::ManualOff;
+            return parsed;
+        }
+
+        parsed.errorMessage = "usage: spec manual <on|off>.";
+        return parsed;
+    }
+
+    if (NormalizeToken(words[1]) == "switch")
+    {
+        if (words.size() == 2)
+        {
+            parsed.specControlAction = SpecControlAction::SwitchToggle;
+            return parsed;
+        }
+
+        if (words.size() == 3 && NormalizeToken(words[2]) == "1")
+        {
+            parsed.specControlAction = SpecControlAction::SwitchPrimary;
+            return parsed;
+        }
+
+        if (words.size() == 3 && NormalizeToken(words[2]) == "2")
+        {
+            parsed.specControlAction = SpecControlAction::SwitchSecondary;
+            return parsed;
+        }
+
+        parsed.errorMessage = "usage: spec switch [1|2].";
         return parsed;
     }
 
@@ -1761,6 +1931,40 @@ void SavePetSpec(Player* bot, PetSpecChoice choice)
     CharacterDatabase.Execute(
         "REPLACE INTO character_settings (guid, source, data) VALUES ({}, '{}', '{}')",
         bot->GetGUID().GetCounter(), PET_SPEC_SOURCE, PetSpecChoiceToString(choice));
+}
+
+bool LoadManualSpecMode(Player* bot)
+{
+    if (!bot)
+        return false;
+
+    QueryResult result = CharacterDatabase.Query(
+        "SELECT data FROM character_settings WHERE guid = {} AND source = '{}' LIMIT 1",
+        bot->GetGUID().GetCounter(), MANUAL_SPEC_SOURCE);
+
+    if (!result)
+        return false;
+
+    std::string const value = NormalizeToken((*result)[0].Get<std::string>());
+    return value == "1" || value == "on" || value == "true";
+}
+
+void SaveManualSpecMode(Player* bot, bool enabled)
+{
+    if (!bot)
+        return;
+
+    if (!enabled)
+    {
+        CharacterDatabase.Execute(
+            "DELETE FROM character_settings WHERE guid = {} AND source = '{}'",
+            bot->GetGUID().GetCounter(), MANUAL_SPEC_SOURCE);
+        return;
+    }
+
+    CharacterDatabase.Execute(
+        "REPLACE INTO character_settings (guid, source, data) VALUES ({}, '{}', '1')",
+        bot->GetGUID().GetCounter(), MANUAL_SPEC_SOURCE);
 }
 
 constexpr int32 HUNTER_PET_TALENT_FEROCITY = 0;
@@ -3273,6 +3477,9 @@ void LearnQuestClassSpells(Player* bot)
         if (IsTalentLockedQuestReward(bot, quest))
             continue;
 
+        if (QuestRewardsBlockedEpicClassMountSpell(bot, quest))
+            continue;
+
         bot->learnQuestRewardedSpells(quest);
     }
 }
@@ -3329,6 +3536,9 @@ bool ShouldTeachTrainerSpell(Player* bot, Trainer::Trainer* trainer, Trainer::Sp
                              bool allowPrimaryProfessionSpells)
 {
     if (!bot || !trainer || !trainerSpell || !trainer->CanTeachSpell(bot, trainerSpell))
+        return false;
+
+    if (SpellTeachesBlockedEpicClassMountSpell(bot, trainerSpell->SpellId))
         return false;
 
     if (trainer->GetTrainerType() == Trainer::Type::Class)
@@ -3498,6 +3708,80 @@ void RestoreRidingState(Player* bot, RidingStateSnapshot const& snapshot)
     bot->SetSkill(SKILL_RIDING, restoredStep, snapshot.value, restoredMaxValue);
 }
 
+bool IsSetupGrantedRidingRank(Player* bot, ExpansionCap cap, size_t rankIndex)
+{
+    if (!bot)
+        return false;
+
+    switch (rankIndex)
+    {
+        case 0:
+            return bot->GetLevel() >= SETUP_APPRENTICE_RIDING_LEVEL;
+        case 2:
+            return cap != ExpansionCap::Vanilla && bot->GetLevel() >= SETUP_EXPERT_RIDING_LEVEL;
+        default:
+            return false;
+    }
+}
+
+uint16 GetSetupRidingSkillFloor(Player* bot, ExpansionCap cap)
+{
+    if (!bot)
+        return 0;
+
+    if (cap != ExpansionCap::Vanilla && bot->GetLevel() >= SETUP_EXPERT_RIDING_LEVEL)
+        return RIDING_EXPERT_SKILL;
+
+    if (bot->GetLevel() >= SETUP_APPRENTICE_RIDING_LEVEL)
+        return RIDING_APPRENTICE_SKILL;
+
+    return 0;
+}
+
+void ApplySetupRidingPolicy(Player* bot, RidingStateSnapshot const& snapshot, ExpansionCap cap)
+{
+    if (!bot)
+        return;
+
+    auto const& ridingRankSpellIds = GetRidingRankSpellIds();
+
+    for (int32 i = static_cast<int32>(ridingRankSpellIds.size()) - 1; i >= 0; --i)
+    {
+        size_t const rankIndex = static_cast<size_t>(i);
+        if (snapshot.knownRankSpells[rankIndex] || IsSetupGrantedRidingRank(bot, cap, rankIndex))
+            continue;
+
+        if (bot->HasSpell(ridingRankSpellIds[rankIndex]))
+            bot->removeSpell(ridingRankSpellIds[rankIndex], SPEC_MASK_ALL, false);
+    }
+
+    for (size_t i = 0; i < ridingRankSpellIds.size(); ++i)
+    {
+        if (!(snapshot.knownRankSpells[i] || IsSetupGrantedRidingRank(bot, cap, i)))
+            continue;
+
+        if (!bot->HasSpell(ridingRankSpellIds[i]))
+            bot->learnSpell(ridingRankSpellIds[i], false);
+    }
+
+    uint16 const targetValue = std::max(snapshot.value, GetSetupRidingSkillFloor(bot, cap));
+    uint16 const targetMaxValue = std::max(snapshot.maxValue, targetValue);
+
+    if (!targetMaxValue)
+    {
+        if (!snapshot.hadSkill &&
+            (bot->HasSkill(SKILL_RIDING) || bot->GetPureSkillValue(SKILL_RIDING) != 0 || bot->GetPureMaxSkillValue(SKILL_RIDING) != 0))
+        {
+            bot->SetSkill(SKILL_RIDING, 0, 0, 0);
+        }
+
+        return;
+    }
+
+    uint16 const targetStep = std::max<uint16>(snapshot.step, GetSkillStepForValue(targetMaxValue));
+    bot->SetSkill(SKILL_RIDING, targetStep, targetValue, targetMaxValue);
+}
+
 struct RidingStateGuard
 {
     explicit RidingStateGuard(Player* target, bool enabled) : bot(target)
@@ -3566,11 +3850,17 @@ void LearnBotSpellsForCurrentLevel(Player* bot)
     if (!bot)
         return;
 
+    RidingStateSnapshot const ridingSnapshot = CaptureRidingState(bot);
+    EpicClassMountSpellSnapshot const epicClassMountSnapshot = CaptureEpicClassMountSpellState(bot);
+
     PlayerbotFactory factory(bot, bot->GetLevel());
     factory.InitClassSpells();
     InitAvailableSpellsFiltered(bot, false);
     LearnQuestClassSpells(bot);
     factory.InitSpecialSpells();
+
+    if (RemoveNewlyGrantedEpicClassMountSpells(bot, epicClassMountSnapshot))
+        RestoreRidingState(bot, ridingSnapshot);
 }
 
 void ApplyGlyphStateForCap(Player* bot, ExpansionCap cap)
@@ -3623,7 +3913,8 @@ bool ExecuteSetupCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI,
 
     PlayerbotFactory factory(bot, bot->GetLevel());
     bool const isAltBot = botAI->IsAlt();
-    RidingStateGuard const ridingGuard(bot, isAltBot);
+    RidingStateSnapshot const ridingSnapshot = CaptureRidingState(bot);
+    EpicClassMountSpellSnapshot const epicClassMountSnapshot = CaptureEpicClassMountSpellState(bot);
     auto const shouldRun = [isAltBot](bool altGate) { return !isAltBot || altGate; };
     ExpansionCap const setupCap = ResolveSetupExpansionCap(bot, config);
     Optional<PetSpecChoice> const savedPetSpec = LoadSavedPetSpec(bot);
@@ -3665,6 +3956,7 @@ bool ExecuteSetupCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI,
     if (shouldRun(sPlayerbotAIConfig.altMaintenanceSkills))
     {
         factory.InitSkills();
+        ApplySetupRidingPolicy(bot, ridingSnapshot, setupCap);
         GrantSecondaryProfessions(bot, setupCap);
     }
 
@@ -3679,6 +3971,12 @@ bool ExecuteSetupCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI,
 
     if (shouldRun(sPlayerbotAIConfig.altMaintenanceSpecialSpells))
         factory.InitSpecialSpells();
+
+    bool const removedEpicClassMount = RemoveNewlyGrantedEpicClassMountSpells(bot, epicClassMountSnapshot);
+    if (shouldRun(sPlayerbotAIConfig.altMaintenanceSkills))
+        ApplySetupRidingPolicy(bot, ridingSnapshot, setupCap);
+    else if (removedEpicClassMount)
+        RestoreRidingState(bot, ridingSnapshot);
 
     if (shouldRun(sPlayerbotAIConfig.altMaintenanceMounts))
         factory.InitMounts();
@@ -3759,6 +4057,97 @@ bool ExecuteRestockCommand(Player* bot, PlayerbotAI* botAI)
     return true;
 }
 
+bool ExecuteSpecManualCommand(Player* bot, PlayerbotAI* botAI, ParsedBotCommand const& command, std::string& errorMessage)
+{
+    if (!bot || !botAI)
+    {
+        errorMessage = "bot AI is not available.";
+        return false;
+    }
+
+    if (!botAI->IsAlt())
+    {
+        errorMessage = "manual spec mode is only available for altbots.";
+        return false;
+    }
+
+    bool const enabled = command.specControlAction == SpecControlAction::ManualOn;
+    SaveManualSpecMode(bot, enabled);
+    botAI->TellMasterNoFacing("spec: manual mode " + std::string(enabled ? "on" : "off") + " for " + bot->GetName() + '.');
+    return true;
+}
+
+bool ExecuteSpecSwitchCommand(Player* bot, PlayerbotAI* botAI, ParsedBotCommand const& command, std::string& errorMessage)
+{
+    if (!bot || !botAI)
+    {
+        errorMessage = "bot AI is not available.";
+        return false;
+    }
+
+    if (!botAI->IsAlt())
+    {
+        errorMessage = "spec switch is only available for altbots.";
+        return false;
+    }
+
+    uint8 const specsCount = bot->GetSpecsCount();
+    if (specsCount == 0)
+    {
+        errorMessage = "no talent spec slots are available for " + bot->GetName() + '.';
+        return false;
+    }
+
+    uint8 targetSpec = 0;
+    switch (command.specControlAction)
+    {
+        case SpecControlAction::SwitchToggle:
+            if (specsCount < 2)
+            {
+                errorMessage = "dual spec is not learned on " + bot->GetName() + '.';
+                return false;
+            }
+            targetSpec = bot->GetActiveSpec() == 0 ? 1 : 0;
+            break;
+        case SpecControlAction::SwitchPrimary:
+            targetSpec = 0;
+            break;
+        case SpecControlAction::SwitchSecondary:
+            if (specsCount < 2)
+            {
+                errorMessage = "dual spec is not learned on " + bot->GetName() + '.';
+                return false;
+            }
+            targetSpec = 1;
+            break;
+        default:
+            errorMessage = "invalid spec switch command.";
+            return false;
+    }
+
+    if (targetSpec >= specsCount)
+    {
+        errorMessage = "requested talent spec slot is not available for " + bot->GetName() + '.';
+        return false;
+    }
+
+    if (bot->GetActiveSpec() != targetSpec)
+        bot->ActivateSpec(targetSpec);
+
+    bot->SendTalentsInfoData(false);
+    ResetBotAIAndActions(botAI);
+
+    if (bot->getClass() == CLASS_PALADIN)
+    {
+        ResolvedSpec resolved;
+        if (ResolveCurrentSpec(bot, resolved))
+            NormalizePaladinRighteousFury(bot, botAI, resolved.definition);
+    }
+
+    botAI->TellMasterNoFacing("spec: active talent spec " + std::to_string(uint32(targetSpec + 1)) + " for " + bot->GetName() + '.');
+    return true;
+}
+
 bool ExecuteSpecCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI, ModuleConfig const& config,
                         ParsedBotCommand const& command, std::string& errorMessage)
 {
@@ -3766,6 +4155,25 @@ bool ExecuteSpecCommand(Player* commandSender, Player* bot, PlayerbotAI* botAI, 
     {
         errorMessage = "bot AI is not available.";
         return false;
+    }
+
+    switch (command.specControlAction)
+    {
+        case SpecControlAction::ManualOn:
+        case SpecControlAction::ManualOff:
+            return ExecuteSpecManualCommand(bot, botAI, command, errorMessage);
+        case SpecControlAction::SwitchToggle:
+        case SpecControlAction::SwitchPrimary:
+        case SpecControlAction::SwitchSecondary:
+            return ExecuteSpecSwitchCommand(bot, botAI, command, errorMessage);
+        case SpecControlAction::None:
+            break;
+    }
+
+    if (botAI->IsAlt() && LoadManualSpecMode(bot))
+    {
+        botAI->TellMasterNoFacing("spec: manual mode is on for " + bot->GetName() + "; spec request ignored.");
+        return true;
     }
 
     ResolvedSpec resolved;

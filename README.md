@@ -9,6 +9,8 @@ The bot-side command set is now:
 - `setup`
 - `spec`
 - `spec <spec|role>`
+- `spec manual <on|off>`
+- `spec switch [1|2]`
 - `restock`
 - `petspec <tank|dps|stealth|control>`
 
@@ -51,6 +53,10 @@ Secondary-profession caps granted by `setup` are expansion-gated:
 
 For addclass/classbots, `setup` also syncs the bot level to the commanding player before running the setup pass.
 
+Riding handled by `setup` is progression-friendly: it grants Apprentice Riding at level 40+, grants basic flying / Expert Riding at level 68+ when the setup expansion cap allows flying, never grants Journeyman or Artisan Riding, and does not reduce a bot that already has a higher riding skill.
+
+`setup` and `spec` do not grant the level-60 paladin/warlock epic class mount summons (`Summon Charger`, blood elf `Summon Charger`, or `Summon Dreadsteed`). Bots that already know those spells keep them.
+
 For hunters with a saved `petspec`, `setup` preserves the current active pet when it already matches that petspec, reapplies its talents and taunt state, and only swaps or creates a pet when the current one does not fit.
 
 For paladins, `setup` removes `Righteous Fury` when the current spec is not protection.
@@ -77,6 +83,10 @@ Notes:
 - Role buckets such as `tank`, `dps`, `heal`, `melee`, and `ranged` resolve per class. If a class has several valid specs in the bucket, one is chosen at random.
 - Exact spec aliases such as `prot`, `disc`, `mm`, `blood tank`, and `feral dps` still work.
 - Expansion limits for `spec` come from the target bot's own progression row when available, not from the commanding player.
+
+For altbots with manually assigned talents, `spec manual on` makes later `spec <spec|role>` commands leave the bot's talents alone. `spec manual off` returns the bot to normal premade spec handling. Manual mode only applies to altbots.
+
+For altbots with dual spec learned, `spec switch` toggles between primary and secondary talents. `spec switch 1` activates the primary talent spec, and `spec switch 2` activates the secondary talent spec. The command does not grant dual spec.
 
 ### `restock`
 
